@@ -46,7 +46,7 @@
       "term": "LP",
       "expansion": "läsperiod",
       "lang": "sv",
-      "definition": "Läsperiod — KTH:s läsår är delat i fyra läsperioder (LP1–LP4).",
+      "definition": "Läsperiod – KTH:s läsår är delat i fyra läsperioder (LP1–LP4).",
       "added_by": "admin",
       "added_ts": "2026-05-01"
     },
@@ -62,7 +62,7 @@
       "term": "PA",
       "expansion": "programansvarig",
       "lang": "sv",
-      "definition": "Programansvarig — den lärare som leder ett utbildningsprogram.",
+      "definition": "Programansvarig – den lärare som leder ett utbildningsprogram.",
       "added_by": "admin",
       "added_ts": "2026-05-01"
     },
@@ -174,7 +174,7 @@
       "term": "militärövning",
       "expansion": "militär grundutbildning, värnpliktstjänstgöring",
       "lang": "sv",
-      "definition": "Tjänstgöring i Försvarsmakten — räknas som särskilt skäl för studieuppehåll.",
+      "definition": "Tjänstgöring i Försvarsmakten – räknas som särskilt skäl för studieuppehåll.",
       "added_by": "admin",
       "added_ts": "2026-05-09"
     }

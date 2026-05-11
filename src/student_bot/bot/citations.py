@@ -192,11 +192,11 @@ def format_sources_block(
 # the README's "five concepts" list — keep these short so they don't bury
 # the answer.
 LITERACY_FOOTERS_SV = [
-    "_Tips: klicka på källorna och dubbelkolla svaren mot dokumenten — boten kan ha fel även när den låter säker._",
+    "_Tips: klicka på källorna och dubbelkolla svaren mot dokumenten – boten kan ha fel även när den låter säker._",
     "_Tips: en stor språkmodell (LLM) kan låta övertygande utan att ha rätt. Lita på källorna, inte på tonen._",
-    "_Tips: boten känner bara till dokumenten den indexerats på. För personliga ärenden — kontakta studievägledaren._",
+    "_Tips: boten känner bara till dokumenten den indexerats på. För personliga ärenden – kontakta studievägledaren._",
     "_Tips: dina frågor loggas anonymt för att förbättra boten. Skicka `!privacy off` om du vill stänga av loggning._",
-    "_Tips: boten är ett komplement, inte en ersättning för studievägledaren — särskilt vid beslut som påverkar dina studier._",
+    "_Tips: boten är ett komplement, inte en ersättning för studievägledaren – särskilt vid beslut som påverkar dina studier._",
 ]
 LITERACY_FOOTERS_EN = [
     "_Tip: click the sources and double-check against the documents — the bot can be wrong even when it sounds confident._",

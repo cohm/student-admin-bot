@@ -1,7 +1,7 @@
 ---
 # Optional. If omitted, the page title is taken from the first H1, then
 # the file stem.
-title: KEX i CTFYS — kort guide
+title: KEX i CTFYS – kort guide
 
 # Authors are shown in the rendered footer ("Sammanställt av …" /
 # "Compiled by …"). Two accepted shapes:
@@ -20,7 +20,7 @@ authors:
 updated: 2026-05-09
 ---
 
-# KEX i CTFYS — kort guide
+# KEX i CTFYS – kort guide
 
 Detta är ett exempel på en kuraterad markdown-fil som boten kan citera.
 Filen ska ligga under `docs/corpus/markdown/` (eller någon annan
@@ -31,7 +31,7 @@ underkatalog som **inte** är `web_import/`) för att rendreras via
 
 Webbsidor på `kth.se` täcker programmets struktur men inte alltid hur
 processer fungerar i praktiken. Kuraterade `.md`-filer är ett ställe där
-du kan formulera svar tydligare än de officiella källorna gör — och
+du kan formulera svar tydligare än de officiella källorna gör – och
 fortfarande peka studenten till en rendering som visar vem som står
 bakom texten.
 
@@ -53,7 +53,7 @@ Vanliga markdown-element fungerar:
 
 ## Vad ska jag undvika?
 
-- Rå HTML — renderaren kör i `html: false`-läge, så `<script>` etc.
+- Rå HTML-renderaren kör i `html: false`-läge, så `<script>` etc.
   passeras igenom som text. Det ska aldrig finnas behov av rå HTML.
-- Att förlita dig på exakta sidnummer eller paragrafer — dessa hör
+- Att förlita dig på exakta sidnummer eller paragrafer – dessa hör
   hemma i de officiella PDF:erna, inte i den kuraterade texten.

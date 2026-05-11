@@ -396,7 +396,7 @@ def _bilingual_missing_kth_course_message(codes: list[str]) -> tuple[str, str]:
     uniq = list(dict.fromkeys(codes))
     tail = uniq[0] if len(uniq) == 1 else ", ".join(uniq)
     return (
-        f"KTH:s kurssidor listar ingen kurs med koden {tail} — sidan är bara en tom "
+        f"KTH:s kurssidor listar ingen kurs med koden {tail} – sidan är bara en tom "
         "mall, så kurskoden finns troligen inte. Kontrollera stavningen på kth.se eller "
         "antagning.se. Vid behov, kontakta studievägledningen.",
         f"KTH's course pages do not list code(s) {tail} — the response is only an empty "
@@ -409,7 +409,7 @@ def _bilingual_missing_kth_program_message(codes: list[str]) -> tuple[str, str]:
     uniq = list(dict.fromkeys(codes))
     tail = uniq[0] if len(uniq) == 1 else ", ".join(uniq)
     return (
-        f"KTH:s programkatalog listar ingen utbildning med koden {tail} — sidan är bara "
+        f"KTH:s programkatalog listar ingen utbildning med koden {tail} – sidan är bara "
         "en tom stub (inga antagningsomgångar i KTH:s data). Kontrollera koden på "
         "https://www.kth.se/student/kurser/kurser-inom-program eller antagning.se.",
         f"KTH's programme catalogue has no programme with code {tail} — the page is only "
@@ -929,10 +929,10 @@ def _truncate_web_chunk_text(text: str) -> str:
 _VALVILLKOR_LABEL_SV: dict[str, str] = {
     "O": "Obligatoriska kurser (O)",
     "V": "Valfria kurser (V)",
-    "VV": "Valbara kurslistor — villkorligt valbara (VV)",
+    "VV": "Valbara kurslistor – villkorligt valbara (VV)",
     "K": "Konditionsvalfria kurser (K)",
     "KV": "Konditionsvalfria kurser (KV)",
-    "VK": "Valbara kurslistor — villkorligt valbara (VK)",
+    "VK": "Valbara kurslistor – villkorligt valbara (VK)",
 }
 _VALVILLKOR_SORT_ORDER: tuple[str, ...] = ("O", "K", "KV", "VV", "VK", "V")
 
@@ -1088,7 +1088,7 @@ def _course_list_plaintext_from_store(store: dict | None, *, focus_year: int | N
                     "**O** = obligatoriska kurser; "
                     "**V** = valfria kurser; "
                     "**VV** = valbara kurslistor (villkorligt valbara / villkorligt valfria; "
-                    "eng. ungefär «conditionally elective» — val inom godkända listor enligt planen). "
+                    "eng. ungefär “conditionally elective” – val inom godkända listor enligt planen). "
                     "Andra koder (t.ex. K) beskrivs i respektive rubrik._"
                 )
                 years_sorted = sorted(

@@ -385,7 +385,7 @@ curl -X PUT \
   https://<mm-host>/api/v4/bots/<bot_user_id> \
   -d '{
     "display_name": "Lux Adminbot",
-    "description": "Automatisk assistent för administrativa frågor om CTFYS-programmet vid KTH. Svaren baseras på indexerade kursdokument — kontrollera alltid mot källorna och kontakta studievägledaren för personliga ärenden."
+    "description": "Automatisk assistent för administrativa frågor om CTFYS-programmet vid KTH. Svaren baseras på indexerade kursdokument – kontrollera alltid mot källorna och kontakta studievägledaren för personliga ärenden."
   }'
 ```
 
