@@ -1,4 +1,4 @@
-FROM python:3.12-slim
+FROM python:3.14-slim
 
 # Match pyproject.toml requires-python (<3.13). Python 3.14 + unconstrained chromadb
 # resolves have produced Chroma persist-dir metadata errors against volumes built
