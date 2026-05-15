@@ -53,6 +53,7 @@ llm:
   # `/`, so first-slash splitting handles both. Switch models by changing
   # this one field, or override via `LLM_ACTIVE` in `.env`.
   active: ollama/gemma-4-E4B-it-GGUF:UD-Q4_K_XL
+  #active: berget/google/gemma-4-31B-it
 
   # Backends. Each entry declares how to reach a hosting service. Multiple
   # models can share one provider — Berget hosts dozens of models behind
