@@ -404,7 +404,9 @@ def _is_clarification_followup_anchor(content: str) -> bool:
     ) or is_multi_program_clarification_assistant_message(content)
 
 
-def merge_programme_clarification_followup(question: str, history: list[dict] | None) -> str:
+def merge_programme_clarification_followup(
+    question: str, history: list[dict] | None, cfg: Config | None = None
+) -> str:
     """If the user is answering our admission-year or program-pick question, fuse with the prior user ask."""
     hist = history or []
     if len(hist) < 2:

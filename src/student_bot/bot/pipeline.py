@@ -365,6 +365,7 @@ def _rerank_web_chunks(
         if prog_codes:
             try:
                 from student_bot.bot.web_retrieval import _get_program_aliases
+
                 aliases = _get_program_aliases(cfg)
                 valid_codes = {str(v).upper() for v in aliases.values()}
                 prog_codes = prog_codes.intersection(valid_codes)
@@ -376,7 +377,10 @@ def _rerank_web_chunks(
                     c_upper_src = (c.rel_source or "").upper()
                     c_upper_url = (c.source_url or "").upper()
                     c_upper_id = (c.chunk_id or "").upper()
-                    if any(code in c_upper_src or code in c_upper_url or code in c_upper_id for code in prog_codes):
+                    if any(
+                        code in c_upper_src or code in c_upper_url or code in c_upper_id
+                        for code in prog_codes
+                    ):
                         c.rerank_score += 4.0
 
         chunks.sort(key=lambda c: c.rerank_score, reverse=True)
@@ -554,7 +558,7 @@ def answer(
             rate_limited=True,
         )
 
-    contextual_q = merge_programme_clarification_followup(question, history)
+    contextual_q = merge_programme_clarification_followup(question, history, cfg)
     programme_followup_merged = contextual_q != question
     history_for_llm = history_without_programme_clarification_tail(
         history, programme_followup_merged
@@ -581,6 +585,7 @@ def answer(
     if prog_codes_in_q:
         try:
             from student_bot.bot.web_retrieval import _get_program_aliases
+
             aliases = _get_program_aliases(cfg)
             # Find the official long name mapped to each code
             code_to_name = {}
@@ -592,7 +597,7 @@ def answer(
                     current_best = code_to_name.get(code_upper, "")
                     if len(alias) > len(current_best):
                         code_to_name[code_upper] = alias
-            
+
             # Build dynamic glossary entries
             if code_to_name:
                 dynamic_entries = []
@@ -601,7 +606,7 @@ def answer(
                     if display_name:
                         display_name = display_name[0].upper() + display_name[1:]
                     dynamic_entries.append(f"- {code_upper} = {display_name}")
-                
+
                 # Append to the prompt's glossary block
                 if dynamic_entries:
                     label = "Ordlista" if lang == "sv" else "Glossary"
