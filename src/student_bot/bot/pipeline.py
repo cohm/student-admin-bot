@@ -604,7 +604,7 @@ def answer(
                 for code_upper, name in code_to_name.items():
                     display_name = name.strip()
                     if display_name:
-                        display_name = display_name[0].upper() + display_name[1:]
+                        display_name = display_name.capitalize()
                     dynamic_entries.append(f"- {code_upper} = {display_name}")
 
                 # Append to the prompt's glossary block
