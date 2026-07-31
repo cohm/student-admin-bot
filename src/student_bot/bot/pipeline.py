@@ -359,6 +359,30 @@ def _rerank_web_chunks(
         if is_master_intent:
             for c in chunks:
                 c.rerank_score += _master_intent_score_adjust(c)
+
+        # Boost chunks belonging to a programme code mentioned in the query
+        prog_codes = {w for w in re.findall(r"\b([A-Z]{5})\b", query)}
+        if prog_codes:
+            try:
+                from student_bot.bot.web_retrieval import _get_program_aliases
+
+                aliases = _get_program_aliases(cfg)
+                valid_codes = {str(v).upper() for v in aliases.values()}
+                prog_codes = prog_codes.intersection(valid_codes)
+            except Exception as e:
+                log.warning("failed to fetch valid program codes for rerank boost: %s", e)
+
+            if prog_codes:
+                for c in chunks:
+                    c_upper_src = (c.rel_source or "").upper()
+                    c_upper_url = (c.source_url or "").upper()
+                    c_upper_id = (c.chunk_id or "").upper()
+                    if any(
+                        code in c_upper_src or code in c_upper_url or code in c_upper_id
+                        for code in prog_codes
+                    ):
+                        c.rerank_score += 4.0
+
         chunks.sort(key=lambda c: c.rerank_score, reverse=True)
     except Exception as e:
         log.warning("dynamic-web rerank failed, keeping original order: %s", e)
@@ -534,7 +558,7 @@ def answer(
             rate_limited=True,
         )
 
-    contextual_q = merge_programme_clarification_followup(question, history)
+    contextual_q = merge_programme_clarification_followup(question, history, cfg)
     programme_followup_merged = contextual_q != question
     history_for_llm = history_without_programme_clarification_tail(
         history, programme_followup_merged
@@ -555,6 +579,43 @@ def answer(
                 max_entries=cfg.jargon.max_glossary_entries,
             )
             jargon_note = jargon.transparency_note(jargon_hits, lang)
+
+    # Look up program codes in query to add them to the glossary dynamically
+    prog_codes_in_q = {w for w in re.findall(r"\b([A-Z]{5})\b", contextual_q)}
+    if prog_codes_in_q:
+        try:
+            from student_bot.bot.web_retrieval import _get_program_aliases
+
+            aliases = _get_program_aliases(cfg)
+            # Find the official long name mapped to each code
+            code_to_name = {}
+            for alias, code in aliases.items():
+                code_upper = str(code).upper()
+                if code_upper in prog_codes_in_q:
+                    if alias.upper() == code_upper:
+                        continue
+                    current_best = code_to_name.get(code_upper, "")
+                    if len(alias) > len(current_best):
+                        code_to_name[code_upper] = alias
+
+            # Build dynamic glossary entries
+            if code_to_name:
+                dynamic_entries = []
+                for code_upper, name in code_to_name.items():
+                    display_name = name.strip()
+                    if display_name:
+                        display_name = display_name.capitalize()
+                    dynamic_entries.append(f"- {code_upper} = {display_name}")
+
+                # Append to the prompt's glossary block
+                if dynamic_entries:
+                    label = "Ordlista" if lang == "sv" else "Glossary"
+                    if not glossary_md:
+                        glossary_md = f"{label}:\n" + "\n".join(dynamic_entries)
+                    else:
+                        glossary_md += "\n" + "\n".join(dynamic_entries)
+        except Exception as e:
+            log.warning("failed to inject program aliases into glossary: %s", e)
 
     web_result = maybe_fetch_dynamic_web(
         cfg,

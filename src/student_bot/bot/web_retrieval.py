@@ -404,7 +404,9 @@ def _is_clarification_followup_anchor(content: str) -> bool:
     ) or is_multi_program_clarification_assistant_message(content)
 
 
-def merge_programme_clarification_followup(question: str, history: list[dict] | None) -> str:
+def merge_programme_clarification_followup(
+    question: str, history: list[dict] | None, cfg: Config | None = None
+) -> str:
     """If the user is answering our admission-year or program-pick question, fuse with the prior user ask."""
     hist = history or []
     if len(hist) < 2:
@@ -428,7 +430,18 @@ def merge_programme_clarification_followup(question: str, history: list[dict] | 
         # Program pick: require either a 5-letter code or an explicit "I mean X"
         # / "jag menar X" anchor. A bare short message could just be a topic
         # shift, so we don't fuse on length alone.
-        has_code = bool(_PROGRAM_CODE_RE.search(qstrip))
+        has_code = False
+        try:
+            aliases = _get_program_aliases(cfg)
+            known_codes = {str(v).upper() for v in aliases.values()}
+            for word in re.findall(r"\b([a-zA-Z]{5})\b", qstrip):
+                if word.upper() in known_codes:
+                    has_code = True
+                    break
+        except Exception:
+            pass
+        if not has_code:
+            has_code = bool(_PROGRAM_CODE_RE.search(qstrip))
         has_pick_anchor = bool(
             re.search(r"\b(?:jag\s+menar|menar)\b", qstrip, re.IGNORECASE)
             or re.search(r"\bi\s+mean\b", qstrip, re.IGNORECASE)
@@ -897,6 +910,11 @@ def _extract_program_candidates(
             continue
         if code not in verbatim_codes:
             verbatim_codes.append(code)
+    for word in re.findall(r"\b([a-zA-Z]{5})\b", question):
+        upper_word = word.upper()
+        if known_codes and upper_word in known_codes:
+            if upper_word not in verbatim_codes:
+                verbatim_codes.append(upper_word)
 
     by_code: dict[str, _ProgramCandidate] = {}
     for code in verbatim_codes:
@@ -1047,6 +1065,17 @@ def _extract_targets_with_cfg(
     # Program lookup is triggered by explicit program intent words OR explicit
     # study-year phrasing (e.g. "år 2", "second year").
     lower = question.lower()
+    has_known_code = False
+    try:
+        aliases = _get_program_aliases(cfg)
+        known_codes = {str(v).upper() for v in aliases.values()}
+        for word in re.findall(r"\b([a-zA-Z]{5})\b", question):
+            if word.upper() in known_codes:
+                has_known_code = True
+                break
+    except Exception:
+        pass
+
     program_intent = (
         "program" in lower
         or "utbildningsplan" in lower
@@ -1055,6 +1084,7 @@ def _extract_targets_with_cfg(
         or "kurslista" in lower
         or _parse_programme_year_level(question) is not None
         or bool(_PROGRAM_CODE_RE.search(question))
+        or has_known_code
     )
 
     if program_intent:
@@ -2340,7 +2370,13 @@ def _resolve_multi_program_candidates(
 
     has_current = any(is_current(t) for _, t, _ in candidates)
 
-    verbatim_typed = set(_PROGRAM_CODE_RE.findall(question))
+    known_codes = {str(v).upper() for v in aliases.values()}
+    verbatim_typed = set()
+    for code in _PROGRAM_CODE_RE.findall(question):
+        verbatim_typed.add(code)
+    for word in re.findall(r"\b([a-zA-Z]{5})\b", question):
+        if word.upper() in known_codes:
+            verbatim_typed.add(word.upper())
     token_freq = _alias_token_frequency(aliases)
     rare_token_threshold = cfg.dynamic_web.discriminator_rare_token_max_aliases
 
