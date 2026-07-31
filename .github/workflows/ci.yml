@@ -17,14 +17,17 @@ jobs:
         with:
           enable-cache: true
 
-      - name: Install ruff
-        run: uv tool install "ruff>=0.6"
+      - name: Sync dependencies (with dev extra)
+        run: uv sync --extra dev
 
+      # Use the ruff pinned in uv.lock (not the latest release) so CI and local
+      # `uv run ruff` agree. `uv tool run ruff` pulled whatever was newest and
+      # drifted ahead of the repo's pin, failing on rules the project doesn't use.
       - name: Ruff lint
-        run: uv tool run ruff check .
+        run: uv run ruff check .
 
       - name: Ruff format (check)
-        run: uv tool run ruff format --check .
+        run: uv run ruff format --check .
 
   build:
     name: Build + import smoke test (Python ${{ matrix.python-version }})
