@@ -52,6 +52,7 @@ from student_bot.logging_db import LogDB
 from student_bot.version import get_version
 from student_bot.web.auth import list_usernames, require_access
 from student_bot.web.md_render import render_file
+from student_bot.web.sso_routes import sso_router
 
 
 log = logging.getLogger("student_bot.web")
@@ -205,6 +206,7 @@ def create_app(cfg: Config | None = None) -> FastAPI:
         https_only=False,
         max_age=cfg.web.session_idle_minutes * 60,
     )
+    app.include_router(sso_router)
 
     docs_dir = cfg.absolute(cfg.paths.docs_dir).resolve()
     if docs_dir.exists() and cfg.web.doc_base_url:
@@ -486,10 +488,12 @@ def create_app(cfg: Config | None = None) -> FastAPI:
 
 
 def _web_user_id(payload, http_user: str | None) -> str:
-    """Stable identifier for a web visitor: prefer Basic Auth username, else
-    fall back to (name|session_id) so anonymous visitors still get a stable key
+    """Stable identifier for a web visitor: prefer SSO or Basic Auth username,
+    else fall back to (name|session_id) so anonymous visitors still get a stable key
     for memory and opt-out."""
     if http_user and http_user != "anonymous":
+        if http_user.startswith("kth:") or http_user.startswith("basic:"):
+            return http_user
         return f"basic:{http_user}"
     sid = payload.session_id or "default"
     name = payload.name or "Anonym"
@@ -497,11 +501,18 @@ def _web_user_id(payload, http_user: str | None) -> str:
 
 
 def _web_user_id_from_request(request: Request, session_id: str) -> str:
+    kth_user = request.session.get("kth_user")
+    if isinstance(kth_user, dict):
+        kth_name = kth_user.get("username") or kth_user.get("kthid") or "sso_user"
+        return f"kth:{kth_name}"
     user = request.session.get("user") or "anonymous"
     name = request.session.get("name") or "Anonym"
     if user != "anonymous":
+        if user.startswith("kth:") or user.startswith("basic:"):
+            return user
         return f"basic:{user}"
     return f"web:{name}:{session_id or 'default'}"
+
 
 
 def _stream_answer(
