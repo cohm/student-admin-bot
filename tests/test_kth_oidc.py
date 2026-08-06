@@ -17,6 +17,7 @@ def test_sso_config_from_env(monkeypatch):
     monkeypatch.setenv("KTH_OIDC_ENABLED", "true")
     monkeypatch.setenv("KTH_OIDC_CLIENT_ID", "my-app-id")
     monkeypatch.setenv("KTH_OIDC_CLIENT_SECRET", "secret-key")
+    monkeypatch.delenv("KTH_OIDC_ISSUER", raising=False)
 
     cfg = SSOConfig.from_env()
     assert cfg.enabled is True
@@ -77,7 +78,8 @@ def test_parse_jwt_payload_unverified():
     assert claims == {"kthid": "u999", "username": "testuser"}
 
 
-def test_sso_routes_disabled_by_default():
+def test_sso_routes_disabled_by_default(monkeypatch):
+    monkeypatch.setenv("KTH_OIDC_ENABLED", "false")
     app = create_app()
     client = TestClient(app)
 
@@ -88,6 +90,7 @@ def test_sso_routes_disabled_by_default():
 
 def test_sso_login_route_redirect(monkeypatch):
     monkeypatch.setenv("KTH_OIDC_ENABLED", "true")
+    monkeypatch.setenv("KTH_OIDC_ISSUER", "https://login.ug.kth.se/adfs")
     monkeypatch.setenv("KTH_OIDC_CLIENT_ID", "my-client")
 
     app = create_app()
@@ -137,7 +140,7 @@ def test_sso_callback_grants_access_and_session(monkeypatch):
     monkeypatch.setenv("WEB_AUTH_ENABLED", "true")
     monkeypatch.setenv("WEB_ACCESS_TOKEN", "secretaccess")
 
-    import student_bot.web.sso_routes as sso_routes
+    from student_bot.web import sso_routes
 
     async def mock_exchange(code, config, expected_nonce=None):
         return {"kthid": "u100001", "username": "teststudent"}
@@ -181,6 +184,7 @@ def test_extract_user_identity_base64_encoded_attributes():
 def test_validate_id_token_claims():
     """Verify exp, aud, and nonce validation for ID tokens."""
     import time
+
     from student_bot.web.kth_oidc import validate_id_token_claims
 
     cfg = SSOConfig(client_id="my-client-id")
@@ -201,5 +205,117 @@ def test_validate_id_token_claims():
     # Nonce mismatch
     bad_nonce_claims = {"aud": "my-client-id", "exp": now + 3600, "nonce": "wrongnonce"}
     assert validate_id_token_claims(bad_nonce_claims, cfg, expected_nonce="nonce123") is False
+
+    # Missing nonce when expected_nonce is required
+    missing_nonce_claims = {"aud": "my-client-id", "exp": now + 3600}
+    assert validate_id_token_claims(missing_nonce_claims, cfg, expected_nonce="nonce123") is False
+
+    # Missing exp claim (OIDC Core 1.0 §2: exp is mandatory)
+    no_exp_claims = {"aud": "my-client-id"}
+    assert validate_id_token_claims(no_exp_claims, cfg) is False
+
+    # Missing aud claim (OIDC Core 1.0 §2: aud is mandatory)
+    no_aud_claims = {"exp": now + 3600}
+    assert validate_id_token_claims(no_aud_claims, cfg) is False
+
+
+def test_decode_and_verify_id_token_rs256_signature():
+    """Verify RS256 signature verification with standard joserfc JWKS."""
+    import time
+
+    from joserfc import jwt
+    from joserfc.jwk import RSAKey
+
+    from student_bot.web.kth_oidc import decode_and_verify_id_token
+
+    cfg = SSOConfig(client_id="test-client", issuer="https://login.ug.kth.se/adfs")
+
+    # Generate RSA Key Pair
+    priv_key = RSAKey.generate_key(2048, {"kid": "key1"})
+    pub_jwk = priv_key.as_dict()
+    jwks_data = {"keys": [pub_jwk]}
+
+    now = int(time.time())
+    payload = {
+        "iss": "https://login.ug.kth.se/adfs",
+        "aud": "test-client",
+        "exp": now + 3600,
+        "kthid": "u100099",
+        "username": "teststudent",
+    }
+    signed_jwt = jwt.encode({"alg": "RS256", "kid": "key1"}, payload, priv_key)
+
+    # 1. Verification with matching JWKS key set succeeds
+    verified_claims = decode_and_verify_id_token(signed_jwt, cfg, jwks_data=jwks_data)
+    assert verified_claims is not None
+    assert verified_claims["kthid"] == "u100099"
+    assert verified_claims["username"] == "teststudent"
+
+    # 2. Forged signature (tampered payload or wrong key) is strictly rejected
+    other_priv_key = RSAKey.generate_key(2048, {"kid": "key1"})
+    forged_jwt = jwt.encode({"alg": "RS256", "kid": "key1"}, payload, other_priv_key)
+    rejected_claims = decode_and_verify_id_token(forged_jwt, cfg, jwks_data=jwks_data)
+    assert rejected_claims is None
+
+    # 3. Missing or invalid JWKS data is fail-closed (returns None)
+    assert decode_and_verify_id_token(signed_jwt, cfg, jwks_data=None) is None
+    assert decode_and_verify_id_token(signed_jwt, cfg, jwks_data={}) is None
+
+
+def test_exchange_code_for_identity_authlib_client(monkeypatch):
+    """Verify exchange_code_for_identity using Authlib AsyncOAuth2Client."""
+    import asyncio
+    import time
+
+    from authlib.integrations.httpx_client import AsyncOAuth2Client
+    from joserfc import jwt
+    from joserfc.jwk import RSAKey
+
+    from student_bot.web import kth_oidc
+
+    cfg = SSOConfig(
+        enabled=True,
+        client_id="test-client",
+        client_secret="test-secret",
+        redirect_uri="http://localhost:8000/auth/kth/callback",
+        issuer="https://login.ug.kth.se/adfs",
+    )
+
+    priv_key = RSAKey.generate_key(2048, {"kid": "key1"})
+    pub_jwk = priv_key.as_dict()
+    jwks_data = {"keys": [pub_jwk]}
+
+    now = int(time.time())
+    payload = {
+        "iss": "https://login.ug.kth.se/adfs",
+        "aud": "test-client",
+        "exp": now + 3600,
+        "kthid": "u100088",
+        "username": "authlibuser",
+    }
+    id_token = jwt.encode({"alg": "RS256", "kid": "key1"}, payload, priv_key)
+
+    async def mock_fetch_metadata(c):
+        return {
+            "token_endpoint": "https://login.ug.kth.se/adfs/oauth2/token",
+            "jwks_uri": "https://login.ug.kth.se/adfs/discovery/keys",
+        }
+
+    async def mock_fetch_jwks(uri):
+        return jwks_data
+
+    monkeypatch.setattr(kth_oidc, "fetch_oidc_metadata", mock_fetch_metadata)
+    monkeypatch.setattr(kth_oidc, "fetch_jwks", mock_fetch_jwks)
+
+    async def mock_fetch_token(self, url, code=None, grant_type=None, **kwargs):
+        return {"id_token": id_token, "access_token": "acc123", "token_type": "Bearer"}
+
+    monkeypatch.setattr(AsyncOAuth2Client, "fetch_token", mock_fetch_token)
+
+    identity = asyncio.run(kth_oidc.exchange_code_for_identity("testcode", cfg))
+    assert identity == {"kthid": "u100088", "username": "authlibuser"}
+
+
+
 
 

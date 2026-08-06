@@ -34,11 +34,14 @@ dependencies = [
     "mattermostdriver>=7.3",
     "websockets>=12.0",
 
-    # Web app
+    # Web app & Authentication
     "fastapi>=0.110",
     "uvicorn>=0.30",
     "itsdangerous>=2.2",
     "markdown-it-py>=3.0",
+    "authlib>=1.3",
+    "joserfc>=1.0",
+    "cryptography>=42.0",
 
     # Per-request memory snapshot (qa_log.rss_mb). Small, well-maintained;
     # already a transitive dep of several other libs in this stack.

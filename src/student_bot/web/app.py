@@ -31,6 +31,7 @@ from fastapi.responses import (
     FileResponse,
     HTMLResponse,
     JSONResponse,
+    RedirectResponse,
     StreamingResponse,
 )
 from fastapi.staticfiles import StaticFiles
@@ -233,6 +234,13 @@ def create_app(cfg: Config | None = None) -> FastAPI:
 
     @app.get(_join_base(base_path, "/"), response_class=HTMLResponse)
     def index(request: Request):
+        from student_bot.web.sso_config import SSOConfig
+
+        sso_cfg = SSOConfig.from_env()
+        if sso_cfg.enabled and not request.session.get("kth_user"):
+            login_url = _join_base(base_path, "/auth/kth/login")
+            return RedirectResponse(login_url, status_code=307)
+
         require_access(request, cfg)
         if name := request.query_params.get("name"):
             request.session["name"] = name
