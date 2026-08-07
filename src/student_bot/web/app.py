@@ -522,7 +522,6 @@ def _web_user_id_from_request(request: Request, session_id: str) -> str:
     return f"web:{name}:{session_id or 'default'}"
 
 
-
 def _stream_answer(
     cfg: Config, db: LogDB, memory: ConversationMemory, payload: ChatRequest, web_user_id: str
 ):

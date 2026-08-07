@@ -223,20 +223,12 @@ def extract_user_identity(claims: dict) -> dict[str, str]:
     to ensure minimal data collection and user privacy. Decodes base64-encoded
     attribute strings if returned by KTH ADFS.
     """
-    raw_kthid = (
-        claims.get("kthid")
-        or claims.get("http://schemas.kth.se/2012/01/kthid")
-        or ""
-    )
+    raw_kthid = claims.get("kthid") or claims.get("http://schemas.kth.se/2012/01/kthid") or ""
     if isinstance(raw_kthid, bytes):
         raw_kthid = raw_kthid.decode("utf-8")
     kthid = _maybe_base64_decode(str(raw_kthid))
 
-    raw_username = (
-        claims.get("username")
-        or claims.get("winaccountname")
-        or ""
-    )
+    raw_username = claims.get("username") or claims.get("winaccountname") or ""
     if isinstance(raw_username, bytes):
         raw_username = raw_username.decode("utf-8")
     username = _maybe_base64_decode(str(raw_username))

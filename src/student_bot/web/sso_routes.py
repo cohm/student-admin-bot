@@ -79,4 +79,3 @@ async def kth_sso_logout(request: Request):
     base_path = request.scope.get("root_path", "").rstrip("/")
     redirect_target = f"{base_path}/" if base_path else "/"
     return RedirectResponse(redirect_target, status_code=303)
-

@@ -80,11 +80,9 @@ WEB_SESSION_SECRET=random-hex-string               # auto-generated if unset
 
 ## Integration & Live Provider Testing
 
-To verify the implementation end-to-end prior to receiving production credentials from KTH IT, two testing approaches were used:
+To verify the implementation end-to-end prior to receiving production credentials from KTH IT the following solution was implemented:
 
-1. **Live Cloud Provider (Auth0)** — The application was configured and tested against Auth0 as a live cloud OpenID Connect provider. This validated the complete real-world authentication flow: browser redirection to a cloud login page, real user authentication, back-channel token exchange over HTTPS, dynamic OIDC discovery (`/.well-known/openid-configuration`), public JWKS RSA key retrieval, and RS256 token verification.
-
-2. **Local Mock Provider (`mock_oidc`)** — During initial development, a standalone local mock OIDC server was created to simulate KTH ADFS endpoints (`/oauth2/authorize`, `/oauth2/token`, `/discovery/keys`). The mock server rendered a login form and minted runtime RSA 2048-bit signed `id_token` payloads to test local code paths, CSRF state protection, and session cookie assignment before connecting to live providers.
+**Live Cloud Provider (Auth0)** — The application was configured and tested against Auth0 as a live cloud OpenID Connect provider. This validated the complete real-world authentication flow: browser redirection to a cloud login page, real user authentication, back-channel token exchange over HTTPS, dynamic OIDC discovery (`/.well-known/openid-configuration`), public JWKS RSA key retrieval, and RS256 token verification.
 
 ## Tests
 

@@ -314,8 +314,3 @@ def test_exchange_code_for_identity_authlib_client(monkeypatch):
 
     identity = asyncio.run(kth_oidc.exchange_code_for_identity("testcode", cfg))
     assert identity == {"kthid": "u100088", "username": "authlibuser"}
-
-
-
-
-

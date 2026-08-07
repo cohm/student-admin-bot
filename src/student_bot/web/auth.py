@@ -239,7 +239,6 @@ def require_access(request: Request, cfg: Config) -> AuthContext:
     return AuthContext(True, user, True, request.session.get("name"), is_admin)
 
 
-
 __all__ = [
     "AuthContext",
     "UserRecord",
