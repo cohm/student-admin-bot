@@ -7,7 +7,7 @@ and strict minimal claim extraction (kthid and username ONLY).
 Sources & References:
 - KTH OIDC Configuration & Attribute Names:
   https://intra.kth.se/en/it/natverk/identitetshantering/konfigurationsinformation-for-saml-openid-connect-1.1045571
-- OpenID Connect Core 1.0 Specification (IETF RFC 6749):
+- OpenID Connect Core 1.0 Specification (built on OAuth 2.0 / RFC 6749):
   https://openid.net/specs/openid-connect-core-1_0.html
 - joserfc Package (PyPI):
   https://pypi.org/project/joserfc/
