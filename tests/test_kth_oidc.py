@@ -262,6 +262,80 @@ def test_decode_and_verify_id_token_rs256_signature():
     assert decode_and_verify_id_token(signed_jwt, cfg, jwks_data={}) is None
 
 
+def test_algorithm_confusion_rejected_by_keyset():
+    """Prove that joserfc rejects algorithm confusion attacks via key type enforcement.
+
+    Background: A classic JWT attack is to forge a token with alg:"none" (skip
+    verification) or alg:"HS256" (use the RSA public key as an HMAC secret).
+    Naive implementations that trust the JWT header's `alg` field are vulnerable.
+
+    joserfc's KeySet.import_key_set + jwt.decode is NOT vulnerable because it
+    selects the verification algorithm based on the *key material* (RSA keys
+    can only verify RSA algorithms), not the attacker-controlled JWT header.
+    This test proves that behaviour, making manual header-parsing unnecessary.
+    """
+    import base64
+    import json
+    import hashlib
+    import hmac
+    import time
+
+    from joserfc.jwk import RSAKey
+
+    from student_bot.web.kth_oidc import decode_and_verify_id_token
+
+    cfg = SSOConfig(client_id="test-client", issuer="https://login.ug.kth.se/adfs")
+
+    # Set up a legitimate RSA key pair and JWKS
+    priv_key = RSAKey.generate_key(2048, {"kid": "key1"})
+    pub_jwk = priv_key.as_dict()
+    jwks_data = {"keys": [pub_jwk]}
+
+    now = int(time.time())
+    payload = {
+        "iss": "https://login.ug.kth.se/adfs",
+        "aud": "test-client",
+        "exp": now + 3600,
+        "kthid": "u100099",
+        "username": "attacker",
+    }
+    payload_json = json.dumps(payload, separators=(",", ":"))
+
+    def b64url(data: bytes) -> str:
+        return base64.urlsafe_b64encode(data).rstrip(b"=").decode("ascii")
+
+    # --- Attack 1: alg:"none" ---
+    # An attacker crafts a token claiming no signature is needed.
+    none_header = b64url(json.dumps({"alg": "none", "kid": "key1"}).encode())
+    none_payload = b64url(payload_json.encode())
+    none_token = f"{none_header}.{none_payload}."
+
+    result = decode_and_verify_id_token(none_token, cfg, jwks_data=jwks_data)
+    assert result is None, "alg:none token must be rejected"
+
+    # --- Attack 2: alg:"HS256" with RSA public key as HMAC secret ---
+    # The attacker takes the public RSA key (available via JWKS) and uses it
+    # as the shared secret for HMAC-SHA256, hoping the verifier will trust
+    # the alg header and verify with the same public key bytes.
+    hs256_header = b64url(json.dumps({"alg": "HS256", "kid": "key1"}).encode())
+    hs256_payload = b64url(payload_json.encode())
+    signing_input = f"{hs256_header}.{hs256_payload}".encode()
+
+    # Use the raw public key JSON as the HMAC secret (standard confusion attack)
+    pub_key_bytes = json.dumps(pub_jwk, separators=(",", ":")).encode()
+    sig = hmac.new(pub_key_bytes, signing_input, hashlib.sha256).digest()
+    hs256_token = f"{hs256_header}.{hs256_payload}.{b64url(sig)}"
+
+    result = decode_and_verify_id_token(hs256_token, cfg, jwks_data=jwks_data)
+    assert result is None, "alg:HS256 token forged with RSA public key must be rejected"
+
+    # --- Attack 3: alg:"HS256" with empty signature ---
+    empty_sig_token = f"{hs256_header}.{hs256_payload}.{b64url(b'')}"
+
+    result = decode_and_verify_id_token(empty_sig_token, cfg, jwks_data=jwks_data)
+    assert result is None, "alg:HS256 token with empty signature must be rejected"
+
+
 def test_exchange_code_for_identity_authlib_client(monkeypatch):
     """Verify exchange_code_for_identity using Authlib AsyncOAuth2Client."""
     import asyncio

@@ -471,7 +471,10 @@ def create_app(cfg: Config | None = None) -> FastAPI:
         """
         ctx = require_access(request, cfg)
         if ctx.user and ctx.user != "anonymous":
-            requester_web_uid = f"basic:{ctx.user}"
+            if ctx.user.startswith("kth:") or ctx.user.startswith("basic:"):
+                requester_web_uid = ctx.user
+            else:
+                requester_web_uid = f"basic:{ctx.user}"
         else:
             # Mirror _web_user_id: explicit query param wins, then session
             # cookie, then the same "Anonym" default ChatRequest uses.
