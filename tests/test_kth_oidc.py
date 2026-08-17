@@ -202,11 +202,19 @@ def test_validate_id_token_claims():
     assert validate_id_token_claims(claims, cfg, expected_nonce="nonce123") is True
 
     # Expired token
-    expired_claims = {"aud": "my-client-id", "iss": "https://login.ug.kth.se/adfs", "exp": now - 3600}
+    expired_claims = {
+        "aud": "my-client-id",
+        "iss": "https://login.ug.kth.se/adfs",
+        "exp": now - 3600,
+    }
     assert validate_id_token_claims(expired_claims, cfg) is False
 
     # Audience mismatch
-    bad_aud_claims = {"aud": "wrong-client", "iss": "https://login.ug.kth.se/adfs", "exp": now + 3600}
+    bad_aud_claims = {
+        "aud": "wrong-client",
+        "iss": "https://login.ug.kth.se/adfs",
+        "exp": now + 3600,
+    }
     assert validate_id_token_claims(bad_aud_claims, cfg) is False
 
     # Nonce mismatch
