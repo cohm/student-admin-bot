@@ -207,7 +207,10 @@ def create_app(cfg: Config | None = None) -> FastAPI:
         https_only=False,
         max_age=cfg.web.session_idle_minutes * 60,
     )
-    app.include_router(sso_router)
+    if base_path:
+        app.include_router(sso_router, prefix=base_path)
+    else:
+        app.include_router(sso_router)
 
     docs_dir = cfg.absolute(cfg.paths.docs_dir).resolve()
     if docs_dir.exists() and cfg.web.doc_base_url:

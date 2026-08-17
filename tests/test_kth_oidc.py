@@ -53,12 +53,14 @@ def test_extract_user_identity_fallback_sub():
 
 
 def test_build_authorization_url():
+    import asyncio
+
     cfg = SSOConfig(
         enabled=True,
         client_id="test-client",
         redirect_uri="http://localhost:8000/auth/kth/callback",
     )
-    url = build_authorization_url(cfg, state="random-state")
+    url = asyncio.run(build_authorization_url(cfg, state="random-state"))
     assert "https://login.ug.kth.se/adfs/oauth2/authorize" in url
     assert "client_id=test-client" in url
     assert "redirect_uri=http%3A%2F%2Flocalhost%3A8000%2Fauth%2Fkth%2Fcallback" in url
@@ -182,41 +184,59 @@ def test_extract_user_identity_base64_encoded_attributes():
 
 
 def test_validate_id_token_claims():
-    """Verify exp, aud, and nonce validation for ID tokens."""
+    """Verify exp, aud, iss, and nonce validation for ID tokens."""
     import time
 
     from student_bot.web.kth_oidc import validate_id_token_claims
 
-    cfg = SSOConfig(client_id="my-client-id")
+    cfg = SSOConfig(client_id="my-client-id", issuer="https://login.ug.kth.se/adfs")
     now = time.time()
 
     # Valid claims
-    claims = {"aud": "my-client-id", "exp": now + 3600, "nonce": "nonce123"}
+    claims = {
+        "aud": "my-client-id",
+        "iss": "https://login.ug.kth.se/adfs",
+        "exp": now + 3600,
+        "nonce": "nonce123",
+    }
     assert validate_id_token_claims(claims, cfg, expected_nonce="nonce123") is True
 
     # Expired token
-    expired_claims = {"aud": "my-client-id", "exp": now - 3600}
+    expired_claims = {"aud": "my-client-id", "iss": "https://login.ug.kth.se/adfs", "exp": now - 3600}
     assert validate_id_token_claims(expired_claims, cfg) is False
 
     # Audience mismatch
-    bad_aud_claims = {"aud": "wrong-client", "exp": now + 3600}
+    bad_aud_claims = {"aud": "wrong-client", "iss": "https://login.ug.kth.se/adfs", "exp": now + 3600}
     assert validate_id_token_claims(bad_aud_claims, cfg) is False
 
     # Nonce mismatch
-    bad_nonce_claims = {"aud": "my-client-id", "exp": now + 3600, "nonce": "wrongnonce"}
+    bad_nonce_claims = {
+        "aud": "my-client-id",
+        "iss": "https://login.ug.kth.se/adfs",
+        "exp": now + 3600,
+        "nonce": "wrongnonce",
+    }
     assert validate_id_token_claims(bad_nonce_claims, cfg, expected_nonce="nonce123") is False
 
     # Missing nonce when expected_nonce is required
-    missing_nonce_claims = {"aud": "my-client-id", "exp": now + 3600}
+    missing_nonce_claims = {
+        "aud": "my-client-id",
+        "iss": "https://login.ug.kth.se/adfs",
+        "exp": now + 3600,
+    }
     assert validate_id_token_claims(missing_nonce_claims, cfg, expected_nonce="nonce123") is False
 
     # Missing exp claim (OIDC Core 1.0 §2: exp is mandatory)
-    no_exp_claims = {"aud": "my-client-id"}
+    no_exp_claims = {"aud": "my-client-id", "iss": "https://login.ug.kth.se/adfs"}
     assert validate_id_token_claims(no_exp_claims, cfg) is False
 
     # Missing aud claim (OIDC Core 1.0 §2: aud is mandatory)
-    no_aud_claims = {"exp": now + 3600}
+    no_aud_claims = {"iss": "https://login.ug.kth.se/adfs", "exp": now + 3600}
     assert validate_id_token_claims(no_aud_claims, cfg) is False
+
+    # Missing iss claim (OIDC Core 1.0 §2: iss is mandatory)
+    no_iss_claims = {"aud": "my-client-id", "exp": now + 3600}
+    assert validate_id_token_claims(no_iss_claims, cfg) is False
 
 
 def test_decode_and_verify_id_token_rs256_signature():

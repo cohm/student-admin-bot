@@ -83,9 +83,14 @@ async def fetch_jwks(jwks_uri: str) -> dict | None:
     return None
 
 
-def build_authorization_url(config: SSOConfig, state: str, nonce: str | None = None) -> str:
+async def build_authorization_url(config: SSOConfig, state: str, nonce: str | None = None) -> str:
     """Build the redirect URL to KTH ADFS login page via Authlib's AsyncOAuth2Client."""
-    authorize_endpoint = f"{config.issuer.rstrip('/')}/oauth2/authorize"
+    metadata = await fetch_oidc_metadata(config)
+    if metadata and "authorization_endpoint" in metadata:
+        authorize_endpoint = metadata["authorization_endpoint"]
+    else:
+        authorize_endpoint = f"{config.issuer.rstrip('/')}/oauth2/authorize"
+
     client = AsyncOAuth2Client(
         client_id=config.client_id,
         redirect_uri=config.redirect_uri,
@@ -118,7 +123,7 @@ def parse_jwt_payload_unverified(id_token: str) -> dict:
         decoded_bytes = base64.urlsafe_b64decode(payload_b64)
         return json.loads(decoded_bytes.decode("utf-8"))
     except Exception as e:  # noqa: BLE001
-        log.warning("failed to decode JWT payload: %s", e)
+        log.warning("Failed to parse JWT payload: %s", e)
         return {}
 
 
@@ -167,8 +172,11 @@ def validate_id_token_claims(
             log.error("KTH OIDC audience mismatch: %s != %s", aud, config.client_id)
             return False
 
-    iss = claims.get("iss")
-    if iss and config.issuer:
+    if config.issuer:
+        iss = claims.get("iss")
+        if not iss:
+            log.error("KTH OIDC missing mandatory 'iss' claim in id_token")
+            return False
         expected_iss = config.issuer.rstrip("/")
         actual_iss = str(iss).rstrip("/")
         if actual_iss != expected_iss:

@@ -20,6 +20,20 @@ from student_bot.web.kth_oidc import (
 )
 from student_bot.web.sso_config import SSOConfig
 
+import os
+
+def _get_base_path(request: Request) -> str:
+    root_path = request.scope.get("root_path", "").rstrip("/")
+    if root_path:
+        return root_path
+    env_base = os.environ.get("WEB_BASE_PATH", "").strip()
+    if env_base:
+        if not env_base.startswith("/"):
+            env_base = "/" + env_base
+        return env_base.rstrip("/")
+    return ""
+
+
 sso_router = APIRouter(prefix="/auth/kth", tags=["kth-sso"])
 
 
@@ -36,7 +50,7 @@ async def kth_sso_login(request: Request):
     nonce = secrets.token_urlsafe(16)
     request.session["oidc_state"] = state
     request.session["oidc_nonce"] = nonce
-    auth_url = build_authorization_url(config, state, nonce=nonce)
+    auth_url = await build_authorization_url(config, state, nonce=nonce)
     return RedirectResponse(auth_url)
 
 
@@ -66,7 +80,7 @@ async def kth_sso_callback(
     # Store ONLY minimal identity (kthid and/or username) in session
     request.session["kth_user"] = identity
     request.session["granted_at"] = time.time()
-    base_path = request.scope.get("root_path", "").rstrip("/")
+    base_path = _get_base_path(request)
     redirect_target = f"{base_path}/" if base_path else "/"
     return RedirectResponse(redirect_target, status_code=303)
 
@@ -76,6 +90,6 @@ async def kth_sso_logout(request: Request):
     """Clear local KTH SSO session."""
     request.session.pop("kth_user", None)
     request.session.pop("granted_at", None)
-    base_path = request.scope.get("root_path", "").rstrip("/")
+    base_path = _get_base_path(request)
     redirect_target = f"{base_path}/" if base_path else "/"
     return RedirectResponse(redirect_target, status_code=303)
