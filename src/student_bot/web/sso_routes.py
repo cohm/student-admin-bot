@@ -9,8 +9,10 @@ Sources & References:
 
 from __future__ import annotations
 
+import os
 import secrets
 import time
+
 from fastapi import APIRouter, HTTPException, Request
 from fastapi.responses import RedirectResponse
 
@@ -20,7 +22,6 @@ from student_bot.web.kth_oidc import (
 )
 from student_bot.web.sso_config import SSOConfig
 
-import os
 
 def _get_base_path(request: Request) -> str:
     root_path = request.scope.get("root_path", "").rstrip("/")

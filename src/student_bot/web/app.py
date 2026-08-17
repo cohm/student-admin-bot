@@ -55,7 +55,6 @@ from student_bot.web.auth import list_usernames, require_access
 from student_bot.web.md_render import render_file
 from student_bot.web.sso_routes import sso_router
 
-
 log = logging.getLogger("student_bot.web")
 
 
@@ -412,7 +411,7 @@ def create_app(cfg: Config | None = None) -> FastAPI:
         # links correctly.
         bot_post_id = f"web:{payload.qa_id}"
         # Ensure the qa row exists and gets its bot_post_id stamped.
-        with db._connect() as conn:  # noqa: SLF001 (intentional lightweight write)
+        with db._connect() as conn:
             row = conn.execute(
                 "SELECT bot_post_id FROM qa_log WHERE id = ?", (payload.qa_id,)
             ).fetchone()
@@ -1504,7 +1503,7 @@ def main(host: str | None, port: int | None, reload: bool):
     if os.environ.get("WEB_SUPPRESS_SYSTEM_LOAD_ACCESS_LOG", "1") != "0":
 
         class _SuppressSystemLoadAccessLog(logging.Filter):
-            def filter(self, record: logging.LogRecord) -> bool:  # noqa: A003 (filter is stdlib name)
+            def filter(self, record: logging.LogRecord) -> bool:
                 msg = record.getMessage()
                 return "GET /api/system-load " not in msg
 

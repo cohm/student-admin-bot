@@ -295,9 +295,9 @@ def test_algorithm_confusion_rejected_by_keyset():
     This test proves that behaviour, making manual header-parsing unnecessary.
     """
     import base64
-    import json
     import hashlib
     import hmac
+    import json
     import time
 
     from joserfc.jwk import RSAKey
