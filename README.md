@@ -500,6 +500,7 @@ Localhost-only by default. Two-factor authentication when exposed to a network. 
 |---|---|
 | **Localhost (default)** | `student-bot-web` binds 127.0.0.1; no auth needed. |
 | **External + auth** | `WEB_BIND_HOST=0.0.0.0 WEB_AUTH_ENABLED=true WEB_ACCESS_TOKEN="$(python -c 'import secrets; print(secrets.token_urlsafe(32))')" student-bot-web`. Visit `http://host:8000/?access=<token>` to claim a session cookie, then HTTP Basic from `data/web_users`. |
+| **KTH SSO (OIDC)** | To implement after approval set `KTH_OIDC_ENABLED=true`, update `KTH_OIDC_CLIENT_ID`, and `KTH_OIDC_CLIENT_SECRET` with values given from KTH. Update `KTH_OIDC_ISSUER` to KTH ADFS (`https://login.ug.kth.se/adfs`). |
 | **Add a user** | `uv run student-bot-mkuser alice` — prompts for a password, writes a scrypt-hashed record. |
 
 The corpus is mounted under `/docs/...` for citation links; PDFs use

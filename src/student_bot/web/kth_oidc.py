@@ -208,7 +208,7 @@ def decode_and_verify_id_token(
 
     try:
         keyset = KeySet.import_key_set(jwks_data)
-        token_obj = jwt.decode(id_token, keyset)
+        token_obj = jwt.decode(id_token, keyset, algorithms=["RS256"])
         claims = dict(token_obj.claims)
     except Exception as e:  # noqa: BLE001
         log.error("KTH OIDC id_token signature verification failed: %s", e)

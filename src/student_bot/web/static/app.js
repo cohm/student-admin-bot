@@ -38,7 +38,6 @@ function botDisplayName() {
   return full.split(" - ")[0].trim() || full;
 }
 
-el("#name").value = state.name;
 el("#opt-out").checked = state.optOut;
 if (el("#learn-more")) el("#learn-more").checked = state.learnMore;
 if (el("#learn-more-chat")) el("#learn-more-chat").checked = state.learnMore;
@@ -92,7 +91,7 @@ if (el("#learn-more-chat")) {
 }
 
 el("#start").addEventListener("click", () => {
-  state.name = el("#name").value.trim() || "Anonym";
+  state.name = "Anonym";
   state.optOut = el("#opt-out").checked;
   localStorage.setItem("name", state.name);
   localStorage.setItem("opt_out", state.optOut ? "1" : "0");
@@ -103,7 +102,7 @@ el("#start").addEventListener("click", () => {
     credentials: "include",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ name: state.name, session_id: state.sessionId, opt_out: state.optOut }),
-  }).catch(() => {});
+  }).catch(() => { });
   onboarding.classList.add("hidden");
   chat.classList.remove("hidden");
   syncTabBarVisibility();
@@ -127,7 +126,7 @@ if (el("#logging-checkbox")) {
         session_id: state.sessionId,
         opt_out: state.optOut,
       }),
-    }).catch(() => {});
+    }).catch(() => { });
     const t = window.t || ((k) => k);
     statusEl.textContent = state.optOut ? t("chat.logging.toast.off") : t("chat.logging.toast.on");
   });
@@ -146,7 +145,7 @@ el("#reset").addEventListener("click", async () => {
     credentials: "include",
     headers: { "Content-Type": "application/json" },
     body: JSON.stringify({ session_id: state.sessionId }),
-  }).catch(() => {});
+  }).catch(() => { });
   messages.innerHTML = "";
   state.thread = [];
   refreshExportButton();
@@ -266,7 +265,7 @@ composer.addEventListener("submit", async (e) => {
             }
           }
         } else if (event === "meta") {
-          try { finalMeta = JSON.parse(data); } catch {}
+          try { finalMeta = JSON.parse(data); } catch { }
         }
       }
     }
@@ -402,7 +401,7 @@ async function refreshSystemLoad() {
       if (!perfEnabled) return;
     }
     applyMergedSystemLoad(data.system_load, data.host_system_load);
-  } catch (_) {}
+  } catch (_) { }
 }
 
 setInterval(() => {
@@ -503,7 +502,7 @@ function appendBot() {
   thinking.setAttribute("aria-live", "polite");
   thinking.innerHTML =
     '<span class="thinking-dots" aria-label="thinking">' +
-      "<span></span><span></span><span></span>" +
+    "<span></span><span></span><span></span>" +
     "</span>" +
     '<span class="thinking-label" hidden></span>';
   // Live-rendered markdown container. Streamed tokens accumulate in
@@ -1060,10 +1059,10 @@ function renderTip(tip) {
 }
 
 function escapeHtml(s) {
-  return (s || "").replace(/[&<>]/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;"}[c]));
+  return (s || "").replace(/[&<>]/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;" }[c]));
 }
 function escapeAttr(s) {
-  return (s || "").replace(/[&<>"']/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;","\"":"&quot;","'":"&#39;"}[c]));
+  return (s || "").replace(/[&<>"']/g, c => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;", "\"": "&quot;", "'": "&#39;" }[c]));
 }
 
 function renderMarkdown(text) {
@@ -1075,7 +1074,7 @@ function renderMarkdown(text) {
   // - **bold**, _italic_, links
   //
   // Intentionally *not* a full markdown parser; keep deterministic and safe.
-  const esc = (s) => (s || "").replace(/[&<>]/g, (c) => ({"&": "&amp;", "<": "&lt;", ">": "&gt;"}[c]));
+  const esc = (s) => (s || "").replace(/[&<>]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;" }[c]));
 
   const renderInline = (s) => {
     let out = esc(s);
@@ -1374,8 +1373,8 @@ function renderDebugPayload(payload, qaId) {
       t("debug.field.jargon"),
       (routing.jargon_hits || []).length
         ? (routing.jargon_hits || [])
-            .map((j) => escapeHtml(j.term || j.key || ""))
-            .join(", ")
+          .map((j) => escapeHtml(j.term || j.key || ""))
+          .join(", ")
         : "<em>(none)</em>",
     ],
   ];
