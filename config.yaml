@@ -52,7 +52,7 @@ llm:
   # FIRST slash — Ollama tags use `:` and Berget/HF model IDs use additional
   # `/`, so first-slash splitting handles both. Switch models by changing
   # this one field, or override via `LLM_ACTIVE` in `.env`.
-  active: litellm/gemma4-31b
+  active: litellm/gemma4-31b-mtp
 
   # Backends. Each entry declares how to reach a hosting service. Multiple
   # models can share one provider — Berget hosts dozens of models behind
@@ -157,6 +157,18 @@ llm:
     # as `delta.reasoning_content` (verified — LiteLLM normalizes it the same way
     # as Qwen, NOT as inline `<|channel>` blocks), so `openai_reasoning_field`
     # filters it out correctly.
+    "litellm/gemma4-31b-mtp":
+      num_ctx: 65536
+      temperature: 0.2
+      max_tokens: 2048
+      thinking: false
+      thinking_style: none
+    "litellm/gemma4-31b-mtp-think":
+      num_ctx: 65536
+      temperature: 0.2
+      max_tokens: 2048
+      thinking: true
+      thinking_style: openai_reasoning_field
     "litellm/gemma4-31b":
       num_ctx: 65536
       temperature: 0.2

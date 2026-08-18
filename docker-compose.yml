@@ -12,6 +12,9 @@ services:
       OLLAMA_URL: http://host.docker.internal:11434
       # config.yaml paths are relative to project root (STUDENT_BOT_ROOT).
       STUDENT_BOT_ROOT: /app
+      # Shared HuggingFace cache: bot + beta-web mmap the SAME on-disk model files, so the
+      # kernel page-cache keeps ONE physical copy of the weights (and nothing re-downloads).
+      HF_HOME: /hfcache
     extra_hosts:
       # On macOS, host.docker.internal already resolves; keep this for Linux parity.
       - "host.docker.internal:host-gateway"
@@ -23,6 +26,8 @@ services:
       - ./data:/app/data
       # Corpus → /app/docs/corpus (paths.docs_dir in config.yaml). Override host path via CORPUS_HOST_PATH in .env
       - ${CORPUS_HOST_PATH:-./docs/corpus}:/app/docs/corpus:ro
+      # Shared model cache (see HF_HOME above) — also makes `docker compose run --rm bot ... reindex` skip the download.
+      - hf_cache:/hfcache
     # Override the default to (re)index instead of running the bot:
     #   docker compose run --rm bot python -m scripts.reindex
 
@@ -43,8 +48,12 @@ services:
       STUDENT_BOT_ROOT: /app
       WEB_BIND_HOST: "0.0.0.0"
       WEB_AUTH_ENABLED: "true"
-      WEB_BASE_PATH: "/betabot"
+      # Served at root on the dedicated subdomain (chatbot.particle.kth.se). See ms02-work-setup.md §9.14.
+      WEB_BASE_PATH: ""
+      # Shared HuggingFace cache (see bot service).
+      HF_HOME: /hfcache
     ports:
+      # Loopback only — Caddy (on this VM) fronts it on :443.
       - "127.0.0.1:8000:8000"
     extra_hosts:
       - "host.docker.internal:host-gateway"
@@ -52,3 +61,7 @@ services:
       - ./config.yaml:/app/config.yaml:ro
       - ./data:/app/data
       - ${CORPUS_HOST_PATH:-./docs/corpus}:/app/docs/corpus:ro
+      - hf_cache:/hfcache
+
+volumes:
+  hf_cache:
