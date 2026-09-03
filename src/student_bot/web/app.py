@@ -31,6 +31,7 @@ from fastapi.responses import (
     FileResponse,
     HTMLResponse,
     JSONResponse,
+    RedirectResponse,
     StreamingResponse,
 )
 from fastapi.staticfiles import StaticFiles
@@ -52,7 +53,7 @@ from student_bot.logging_db import LogDB
 from student_bot.version import get_version
 from student_bot.web.auth import list_usernames, require_access
 from student_bot.web.md_render import render_file
-
+from student_bot.web.sso_routes import sso_router
 
 log = logging.getLogger("student_bot.web")
 
@@ -205,6 +206,10 @@ def create_app(cfg: Config | None = None) -> FastAPI:
         https_only=False,
         max_age=cfg.web.session_idle_minutes * 60,
     )
+    if base_path:
+        app.include_router(sso_router, prefix=base_path)
+    else:
+        app.include_router(sso_router)
 
     docs_dir = cfg.absolute(cfg.paths.docs_dir).resolve()
     if docs_dir.exists() and cfg.web.doc_base_url:
@@ -231,6 +236,13 @@ def create_app(cfg: Config | None = None) -> FastAPI:
 
     @app.get(_join_base(base_path, "/"), response_class=HTMLResponse)
     def index(request: Request):
+        from student_bot.web.sso_config import SSOConfig
+
+        sso_cfg = SSOConfig.from_env()
+        if sso_cfg.enabled and not request.session.get("kth_user"):
+            login_url = _join_base(base_path, "/auth/kth/login")
+            return RedirectResponse(login_url, status_code=307)
+
         require_access(request, cfg)
         if name := request.query_params.get("name"):
             request.session["name"] = name
@@ -399,7 +411,7 @@ def create_app(cfg: Config | None = None) -> FastAPI:
         # links correctly.
         bot_post_id = f"web:{payload.qa_id}"
         # Ensure the qa row exists and gets its bot_post_id stamped.
-        with db._connect() as conn:  # noqa: SLF001 (intentional lightweight write)
+        with db._connect() as conn:
             row = conn.execute(
                 "SELECT bot_post_id FROM qa_log WHERE id = ?", (payload.qa_id,)
             ).fetchone()
@@ -461,7 +473,10 @@ def create_app(cfg: Config | None = None) -> FastAPI:
         """
         ctx = require_access(request, cfg)
         if ctx.user and ctx.user != "anonymous":
-            requester_web_uid = f"basic:{ctx.user}"
+            if ctx.user.startswith("kth:") or ctx.user.startswith("basic:"):
+                requester_web_uid = ctx.user
+            else:
+                requester_web_uid = f"basic:{ctx.user}"
         else:
             # Mirror _web_user_id: explicit query param wins, then session
             # cookie, then the same "Anonym" default ChatRequest uses.
@@ -486,10 +501,12 @@ def create_app(cfg: Config | None = None) -> FastAPI:
 
 
 def _web_user_id(payload, http_user: str | None) -> str:
-    """Stable identifier for a web visitor: prefer Basic Auth username, else
-    fall back to (name|session_id) so anonymous visitors still get a stable key
+    """Stable identifier for a web visitor: prefer SSO or Basic Auth username,
+    else fall back to (name|session_id) so anonymous visitors still get a stable key
     for memory and opt-out."""
     if http_user and http_user != "anonymous":
+        if http_user.startswith("kth:") or http_user.startswith("basic:"):
+            return http_user
         return f"basic:{http_user}"
     sid = payload.session_id or "default"
     name = payload.name or "Anonym"
@@ -497,9 +514,15 @@ def _web_user_id(payload, http_user: str | None) -> str:
 
 
 def _web_user_id_from_request(request: Request, session_id: str) -> str:
+    kth_user = request.session.get("kth_user")
+    if isinstance(kth_user, dict):
+        kth_name = kth_user.get("username") or kth_user.get("kthid") or "sso_user"
+        return f"kth:{kth_name}"
     user = request.session.get("user") or "anonymous"
     name = request.session.get("name") or "Anonym"
     if user != "anonymous":
+        if user.startswith("kth:") or user.startswith("basic:"):
+            return user
         return f"basic:{user}"
     return f"web:{name}:{session_id or 'default'}"
 
@@ -1480,7 +1503,7 @@ def main(host: str | None, port: int | None, reload: bool):
     if os.environ.get("WEB_SUPPRESS_SYSTEM_LOAD_ACCESS_LOG", "1") != "0":
 
         class _SuppressSystemLoadAccessLog(logging.Filter):
-            def filter(self, record: logging.LogRecord) -> bool:  # noqa: A003 (filter is stdlib name)
+            def filter(self, record: logging.LogRecord) -> bool:
                 msg = record.getMessage()
                 return "GET /api/system-load " not in msg
 
