@@ -205,15 +205,6 @@ def basic_auth(request: Request, cfg: Config) -> tuple[str, bool] | None:
 
 def require_access(request: Request, cfg: Config) -> AuthContext:
     """Enforce both gates. Raises HTTPException on failure."""
-    if not cfg.web.auth_enabled:
-        return AuthContext(False, "anonymous", True, request.session.get("name"), False)
-
-    if not check_token_grant(request, cfg):
-        raise HTTPException(
-            status_code=status.HTTP_403_FORBIDDEN,
-            detail="Missing or invalid access token. Use the link you were given.",
-        )
-
     # Check for active KTH SSO session
     kth_user = request.session.get("kth_user")
     if isinstance(kth_user, dict):
@@ -224,9 +215,22 @@ def require_access(request: Request, cfg: Config) -> AuthContext:
             users_path = cfg.absolute(Path(cfg.web.users_file))
             users = load_users_file(users_path)
             info = users.get(kth_name) or users.get(kth_user.get("kthid", ""))
-            if info:
-                is_admin = info.is_admin
+            if not info:
+                raise HTTPException(
+                    status_code=status.HTTP_403_FORBIDDEN,
+                    detail=f"Åtkomst nekad: KTH-kontot '{kth_name}' finns inte i listan över tillåtna användare.",
+                )
+            is_admin = info.is_admin
         return AuthContext(True, user_id_str, True, request.session.get("name"), is_admin)
+
+    if not cfg.web.auth_enabled:
+        return AuthContext(False, "anonymous", True, request.session.get("name"), False)
+
+    if not check_token_grant(request, cfg):
+        raise HTTPException(
+            status_code=status.HTTP_403_FORBIDDEN,
+            detail="Missing or invalid access token. Use the link you were given.",
+        )
 
     auth_info = basic_auth(request, cfg)
     if not auth_info:

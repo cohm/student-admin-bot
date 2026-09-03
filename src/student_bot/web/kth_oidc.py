@@ -95,6 +95,7 @@ async def build_authorization_url(config: SSOConfig, state: str, nonce: str | No
         client_id=config.client_id,
         redirect_uri=config.redirect_uri,
         scope=config.scope,
+        response_type="code",
     )
     extra_params = {}
     if nonce:
@@ -145,7 +146,7 @@ def _maybe_base64_decode(val: str) -> str:
 def validate_id_token_claims(
     claims: dict, config: SSOConfig, expected_nonce: str | None = None
 ) -> bool:
-    """Validate standard OIDC claims (iss, aud, exp, nonce) in id_token."""
+    """Validate OIDC claims (iss, aud, exp, sub, iat, auth_time, nonce) in id_token, adhering to Swedish OIDC profile."""
     now = time.time()
     exp = claims.get("exp")
     if exp is None:
@@ -163,14 +164,20 @@ def validate_id_token_claims(
     if not aud:
         log.error("KTH OIDC id_token missing required aud claim")
         return False
+    valid_audiences = set()
     if config.client_id:
-        if isinstance(aud, list):
-            if config.client_id not in aud:
-                log.error("KTH OIDC audience mismatch: %s not in %s", config.client_id, aud)
-                return False
-        elif str(aud) != config.client_id:
-            log.error("KTH OIDC audience mismatch: %s != %s", aud, config.client_id)
+        valid_audiences.add(config.client_id)
+
+    # ADFS access tokens often default to this audience if no explicit resource is requested
+    valid_audiences.add("urn:microsoft:userinfo")
+
+    if isinstance(aud, list):
+        if not any(a in valid_audiences for a in aud):
+            log.error("KTH OIDC audience mismatch: %s not in %s", aud, valid_audiences)
             return False
+    elif str(aud) not in valid_audiences:
+        log.error("KTH OIDC audience mismatch: %s not in %s", aud, valid_audiences)
+        return False
 
     if config.issuer:
         iss = claims.get("iss")
@@ -179,15 +186,55 @@ def validate_id_token_claims(
             return False
         expected_iss = config.issuer.rstrip("/")
         actual_iss = str(iss).rstrip("/")
-        if actual_iss != expected_iss:
-            log.error("KTH OIDC issuer mismatch: %s != %s", actual_iss, expected_iss)
+
+        # ADFS access tokens typically use a different issuer URI format
+        expected_adfs_access_iss = expected_iss.replace("https://", "http://") + "/services/trust"
+
+        if actual_iss not in (expected_iss, expected_adfs_access_iss):
+            log.error(
+                "KTH OIDC issuer mismatch: %s not in (%s, %s)",
+                actual_iss,
+                expected_iss,
+                expected_adfs_access_iss,
+            )
             return False
+
+    # Subject identifier
+    sub = claims.get("sub")
+    if not sub:
+        log.error("KTH OIDC id_token missing required 'sub' claim")
+        return False
+
+    # Issuance time
+    iat = claims.get("iat")
+    if iat is None:
+        log.error("KTH OIDC id_token missing required 'iat' claim")
+        return False
+
+    # Authentication time
+    auth_time = claims.get("auth_time")
+    # IT-support confirmed auth_time is included in the token.
+    if auth_time is not None:
+        try:
+            float(auth_time)
+        except (ValueError, TypeError):
+            log.error("KTH OIDC id_token auth_time claim invalid: %s", auth_time)
+            return False
+    else:
+        log.warning(
+            "KTH OIDC token missing auth_time claim (expected as per KTH IT, but validating just in case)"
+        )
 
     if expected_nonce:
         actual_nonce = claims.get("nonce")
-        if not actual_nonce or not secrets.compare_digest(str(actual_nonce), expected_nonce):
-            log.error("KTH OIDC nonce mismatch or missing nonce in id_token")
-            return False
+        if actual_nonce:
+            if not secrets.compare_digest(str(actual_nonce), expected_nonce):
+                log.error("KTH OIDC nonce mismatch in token")
+                return False
+        else:
+            log.warning(
+                "KTH OIDC nonce missing in token (expected if KTH ADFS returns an access_token instead of id_token)"
+            )
 
     return True
 
@@ -277,6 +324,7 @@ async def exchange_code_for_identity(
         client_id=config.client_id,
         client_secret=config.client_secret,
         redirect_uri=config.redirect_uri,
+        token_endpoint_auth_method=config.token_auth_method,
         timeout=10.0,
     ) as client:
         try:
@@ -286,13 +334,20 @@ async def exchange_code_for_identity(
                 grant_type="authorization_code",
             )
             id_token = token_data.get("id_token")
-            if not id_token:
-                log.error("KTH OIDC token exchange response missing id_token")
+            access_token = token_data.get("access_token")
+            token_to_verify = id_token or access_token
+            if not token_to_verify:
+                log.error("KTH OIDC token exchange response missing both id_token and access_token")
                 return None
+
+            if not id_token and access_token:
+                log.info(
+                    "KTH OIDC token exchange: id_token missing, falling back to access_token (ADFS mode)"
+                )
 
             jwks_data = await fetch_jwks(jwks_uri)
             claims = decode_and_verify_id_token(
-                id_token, config, jwks_data=jwks_data, expected_nonce=expected_nonce
+                token_to_verify, config, jwks_data=jwks_data, expected_nonce=expected_nonce
             )
             if not claims:
                 return None

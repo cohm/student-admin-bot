@@ -21,6 +21,7 @@ class SSOConfig:
     client_secret: str = ""
     redirect_uri: str = "http://localhost:8000/auth/kth/callback"
     scope: str = "openid"
+    token_auth_method: str = "client_secret_basic"
 
     @classmethod
     def from_env(cls) -> SSOConfig:
@@ -35,4 +36,5 @@ class SSOConfig:
                 "KTH_OIDC_REDIRECT_URI", "http://localhost:8000/auth/kth/callback"
             ),
             scope=os.environ.get("KTH_OIDC_SCOPE", "openid"),
+            token_auth_method=os.environ.get("KTH_OIDC_TOKEN_AUTH_METHOD", "client_secret_basic"),
         )

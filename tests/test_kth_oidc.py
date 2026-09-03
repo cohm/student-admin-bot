@@ -1,7 +1,10 @@
 """Unit tests for KTH SSO / OIDC authentication module."""
 
 import base64
+from pathlib import Path
+from urllib.parse import parse_qs, urlparse
 
+import pytest
 from fastapi.testclient import TestClient
 
 from student_bot.web.app import create_app
@@ -13,11 +16,26 @@ from student_bot.web.kth_oidc import (
 from student_bot.web.sso_config import SSOConfig
 
 
+@pytest.fixture(autouse=True)
+def mock_oidc_discovery(monkeypatch):
+    """Prevent unit tests from making live network calls to KTH ADFS."""
+
+    async def mock_fetch_metadata(config):
+        return {
+            "authorization_endpoint": f"{config.issuer.rstrip('/')}/oauth2/authorize",
+            "token_endpoint": f"{config.issuer.rstrip('/')}/oauth2/token",
+            "jwks_uri": f"{config.issuer.rstrip('/')}/discovery/keys",
+        }
+
+    monkeypatch.setattr("student_bot.web.kth_oidc.fetch_oidc_metadata", mock_fetch_metadata)
+
+
 def test_sso_config_from_env(monkeypatch):
     monkeypatch.setenv("KTH_OIDC_ENABLED", "true")
     monkeypatch.setenv("KTH_OIDC_CLIENT_ID", "my-app-id")
     monkeypatch.setenv("KTH_OIDC_CLIENT_SECRET", "secret-key")
     monkeypatch.delenv("KTH_OIDC_ISSUER", raising=False)
+    monkeypatch.delenv("KTH_OIDC_TOKEN_AUTH_METHOD", raising=False)
 
     cfg = SSOConfig.from_env()
     assert cfg.enabled is True
@@ -25,6 +43,12 @@ def test_sso_config_from_env(monkeypatch):
     assert cfg.client_secret == "secret-key"
     assert cfg.issuer == "https://login.ug.kth.se/adfs"
     assert cfg.scope == "openid"
+    assert cfg.token_auth_method == "client_secret_basic"
+
+    # Custom auth method from env
+    monkeypatch.setenv("KTH_OIDC_TOKEN_AUTH_METHOD", "client_secret_post")
+    cfg2 = SSOConfig.from_env()
+    assert cfg2.token_auth_method == "client_secret_post"
 
 
 def test_extract_user_identity_privacy_scope():
@@ -60,11 +84,13 @@ def test_build_authorization_url():
         client_id="test-client",
         redirect_uri="http://localhost:8000/auth/kth/callback",
     )
-    url = asyncio.run(build_authorization_url(cfg, state="random-state"))
+    url = asyncio.run(build_authorization_url(cfg, state="random-state", nonce="test-nonce"))
     assert "https://login.ug.kth.se/adfs/oauth2/authorize" in url
     assert "client_id=test-client" in url
     assert "redirect_uri=http%3A%2F%2Flocalhost%3A8000%2Fauth%2Fkth%2Fcallback" in url
     assert "state=random-state" in url
+    assert "response_type=code" in url
+    assert "nonce=test-nonce" in url
 
 
 def test_parse_jwt_payload_unverified():
@@ -142,12 +168,23 @@ def test_sso_callback_grants_access_and_session(monkeypatch):
     monkeypatch.setenv("WEB_AUTH_ENABLED", "true")
     monkeypatch.setenv("WEB_ACCESS_TOKEN", "secretaccess")
 
-    from student_bot.web import sso_routes
+    from student_bot.web import auth, sso_routes
 
     async def mock_exchange(code, config, expected_nonce=None):
         return {"kthid": "u100001", "username": "teststudent"}
 
     monkeypatch.setattr(sso_routes, "exchange_code_for_identity", mock_exchange)
+    # Mock whitelist to include teststudent
+    monkeypatch.setattr(
+        sso_routes,
+        "load_users_file",
+        lambda path: {"teststudent": auth.UserRecord(record="dummy", is_admin=False)},
+    )
+    monkeypatch.setattr(
+        auth,
+        "load_users_file",
+        lambda path: {"teststudent": auth.UserRecord(record="dummy", is_admin=False)},
+    )
 
     app = create_app()
     client = TestClient(app)
@@ -170,6 +207,110 @@ def test_sso_callback_grants_access_and_session(monkeypatch):
     health_resp = client.get("/api/health")
     assert health_resp.status_code == 200
     assert health_resp.json()["status"] == "ok"
+
+
+def test_sso_callback_rejects_unauthorized_user(monkeypatch):
+    """Verify that a user not present in web_users is denied access with 403."""
+    from student_bot.config import get_config
+
+    monkeypatch.setenv("KTH_OIDC_ENABLED", "true")
+    monkeypatch.setenv("KTH_OIDC_CLIENT_ID", "my-client")
+    monkeypatch.setenv("WEB_AUTH_ENABLED", "true")
+    monkeypatch.setenv("WEB_ACCESS_TOKEN", "secretaccess")
+    get_config.cache_clear()
+
+    from student_bot.web import auth, sso_routes
+
+    async def mock_exchange(code, config, expected_nonce=None):
+        return {"kthid": "u999999", "username": "unauthorized_user"}
+
+    monkeypatch.setattr(sso_routes, "exchange_code_for_identity", mock_exchange)
+    # Whitelist does NOT contain unauthorized_user
+    monkeypatch.setattr(
+        sso_routes,
+        "load_users_file",
+        lambda path: {"allowed_user": auth.UserRecord(record="dummy", is_admin=False)},
+    )
+
+    app = create_app()
+    client = TestClient(app)
+
+    login_resp = client.get("/auth/kth/login", follow_redirects=False)
+    state = parse_qs(urlparse(login_resp.headers["location"]).query)["state"][0]
+
+    cb_resp = client.get(f"/auth/kth/callback?code=testcode&state={state}", follow_redirects=False)
+    assert cb_resp.status_code == 403
+    assert "Åtkomst nekad" in cb_resp.text
+    assert "unauthorized_user" in cb_resp.text
+
+    # Verify that session is not authorized for index (redirected to login)
+    index_resp = client.get("/", follow_redirects=False)
+    assert index_resp.status_code == 307
+
+    # Verify that session is not authorized for protected endpoints
+    health_resp = client.get("/api/health")
+    assert health_resp.status_code == 403
+
+
+def test_sso_callback_allows_match_by_kthid(monkeypatch):
+    """Verify that matching against web_users works when kthid is used instead of username."""
+    monkeypatch.setenv("KTH_OIDC_ENABLED", "true")
+    monkeypatch.setenv("KTH_OIDC_CLIENT_ID", "my-client")
+
+    from student_bot.web import auth, sso_routes
+
+    async def mock_exchange(code, config, expected_nonce=None):
+        return {"kthid": "u100042", "username": "some_other_alias"}
+
+    monkeypatch.setattr(sso_routes, "exchange_code_for_identity", mock_exchange)
+    # Whitelist has u100042 (kthid)
+    monkeypatch.setattr(
+        sso_routes,
+        "load_users_file",
+        lambda path: {"u100042": auth.UserRecord(record="dummy", is_admin=False)},
+    )
+
+    app = create_app()
+    client = TestClient(app)
+
+    login_resp = client.get("/auth/kth/login", follow_redirects=False)
+    state = parse_qs(urlparse(login_resp.headers["location"]).query)["state"][0]
+
+    cb_resp = client.get(f"/auth/kth/callback?code=testcode&state={state}", follow_redirects=False)
+    assert cb_resp.status_code == 303
+
+
+def test_require_access_enforces_whitelist_for_kth_session():
+    """Verify require_access rejects kth_user if removed from web_users."""
+    from unittest.mock import MagicMock, patch
+    from fastapi import HTTPException
+    from student_bot.web.auth import UserRecord, require_access
+
+    cfg = MagicMock()
+    cfg.web.auth_enabled = True
+    cfg.web.users_file = "data/web_users"
+    cfg.absolute.return_value = Path("/nonexistent/data/web_users")
+
+    # Request with kth_user in session
+    req = MagicMock()
+    req.session = {"kth_user": {"username": "revoked_user", "kthid": "u12345"}}
+
+    # Mock load_users_file returning empty dict (user revoked or missing)
+    with patch("student_bot.web.auth.load_users_file", return_value={}):
+        with pytest.raises(HTTPException) as exc_info:
+            require_access(req, cfg)
+        assert exc_info.value.status_code == 403
+        assert "Åtkomst nekad" in exc_info.value.detail
+
+    # Mock load_users_file returning user
+    with patch(
+        "student_bot.web.auth.load_users_file",
+        return_value={"revoked_user": UserRecord(record="dummy", is_admin=True)},
+    ):
+        ctx = require_access(req, cfg)
+        assert ctx.enabled is True
+        assert ctx.user == "kth:revoked_user"
+        assert ctx.is_admin is True
 
 
 def test_extract_user_identity_base64_encoded_attributes():
@@ -196,15 +337,61 @@ def test_validate_id_token_claims():
     claims = {
         "aud": "my-client-id",
         "iss": "https://login.ug.kth.se/adfs",
+        "sub": "u100001",
+        "iat": int(now),
         "exp": now + 3600,
         "nonce": "nonce123",
     }
     assert validate_id_token_claims(claims, cfg, expected_nonce="nonce123") is True
 
+    # Valid claims with ADFS default userinfo audience
+    userinfo_aud_claims = {
+        "aud": "urn:microsoft:userinfo",
+        "iss": "https://login.ug.kth.se/adfs",
+        "sub": "u100001",
+        "iat": int(now),
+        "exp": now + 3600,
+    }
+    assert validate_id_token_claims(userinfo_aud_claims, cfg) is True
+
+    # Valid claims with ADFS access_token issuer format (http + /services/trust)
+    adfs_iss_claims = {
+        "aud": "my-client-id",
+        "iss": "http://login.ug.kth.se/adfs/services/trust",
+        "sub": "u100001",
+        "iat": int(now),
+        "exp": now + 3600,
+    }
+    assert validate_id_token_claims(adfs_iss_claims, cfg) is True
+
+    # Valid auth_time claim
+    auth_time_claims = {
+        "aud": "my-client-id",
+        "iss": "https://login.ug.kth.se/adfs",
+        "sub": "u100001",
+        "iat": int(now),
+        "exp": now + 3600,
+        "auth_time": int(now) - 60,
+    }
+    assert validate_id_token_claims(auth_time_claims, cfg) is True
+
+    # Invalid non-numeric auth_time claim
+    bad_auth_time_claims = {
+        "aud": "my-client-id",
+        "iss": "https://login.ug.kth.se/adfs",
+        "sub": "u100001",
+        "iat": int(now),
+        "exp": now + 3600,
+        "auth_time": "not-a-timestamp",
+    }
+    assert validate_id_token_claims(bad_auth_time_claims, cfg) is False
+
     # Expired token
     expired_claims = {
         "aud": "my-client-id",
         "iss": "https://login.ug.kth.se/adfs",
+        "sub": "u100001",
+        "iat": int(now),
         "exp": now - 3600,
     }
     assert validate_id_token_claims(expired_claims, cfg) is False
@@ -213,6 +400,8 @@ def test_validate_id_token_claims():
     bad_aud_claims = {
         "aud": "wrong-client",
         "iss": "https://login.ug.kth.se/adfs",
+        "sub": "u100001",
+        "iat": int(now),
         "exp": now + 3600,
     }
     assert validate_id_token_claims(bad_aud_claims, cfg) is False
@@ -221,30 +410,67 @@ def test_validate_id_token_claims():
     bad_nonce_claims = {
         "aud": "my-client-id",
         "iss": "https://login.ug.kth.se/adfs",
+        "sub": "u100001",
+        "iat": int(now),
         "exp": now + 3600,
         "nonce": "wrongnonce",
     }
     assert validate_id_token_claims(bad_nonce_claims, cfg, expected_nonce="nonce123") is False
 
-    # Missing nonce when expected_nonce is required
+    # Missing nonce when expected_nonce is passed: logs a warning but succeeds (ADFS access_token compatibility)
     missing_nonce_claims = {
         "aud": "my-client-id",
         "iss": "https://login.ug.kth.se/adfs",
+        "sub": "u100001",
+        "iat": int(now),
         "exp": now + 3600,
     }
-    assert validate_id_token_claims(missing_nonce_claims, cfg, expected_nonce="nonce123") is False
+    assert validate_id_token_claims(missing_nonce_claims, cfg, expected_nonce="nonce123") is True
 
     # Missing exp claim (OIDC Core 1.0 §2: exp is mandatory)
-    no_exp_claims = {"aud": "my-client-id", "iss": "https://login.ug.kth.se/adfs"}
+    no_exp_claims = {
+        "aud": "my-client-id",
+        "iss": "https://login.ug.kth.se/adfs",
+        "sub": "u100001",
+        "iat": int(now),
+    }
     assert validate_id_token_claims(no_exp_claims, cfg) is False
 
     # Missing aud claim (OIDC Core 1.0 §2: aud is mandatory)
-    no_aud_claims = {"iss": "https://login.ug.kth.se/adfs", "exp": now + 3600}
+    no_aud_claims = {
+        "iss": "https://login.ug.kth.se/adfs",
+        "sub": "u100001",
+        "iat": int(now),
+        "exp": now + 3600,
+    }
     assert validate_id_token_claims(no_aud_claims, cfg) is False
 
     # Missing iss claim (OIDC Core 1.0 §2: iss is mandatory)
-    no_iss_claims = {"aud": "my-client-id", "exp": now + 3600}
+    no_iss_claims = {
+        "aud": "my-client-id",
+        "sub": "u100001",
+        "iat": int(now),
+        "exp": now + 3600,
+    }
     assert validate_id_token_claims(no_iss_claims, cfg) is False
+
+    # Missing sub claim
+    no_sub_claims = {
+        "aud": "my-client-id",
+        "iss": "https://login.ug.kth.se/adfs",
+        "iat": int(now),
+        "exp": now + 3600,
+    }
+    assert validate_id_token_claims(no_sub_claims, cfg) is False
+
+    # Missing iat claim
+    no_iat_claims = {
+        "aud": "my-client-id",
+        "iss": "https://login.ug.kth.se/adfs",
+        "sub": "u100001",
+        "exp": now + 3600,
+    }
+    assert validate_id_token_claims(no_iat_claims, cfg) is False
 
 
 def test_decode_and_verify_id_token_rs256_signature():
@@ -267,6 +493,8 @@ def test_decode_and_verify_id_token_rs256_signature():
     payload = {
         "iss": "https://login.ug.kth.se/adfs",
         "aud": "test-client",
+        "sub": "u100099",
+        "iat": now,
         "exp": now + 3600,
         "kthid": "u100099",
         "username": "teststudent",
@@ -391,6 +619,8 @@ def test_exchange_code_for_identity_authlib_client(monkeypatch):
     payload = {
         "iss": "https://login.ug.kth.se/adfs",
         "aud": "test-client",
+        "sub": "u100088",
+        "iat": now,
         "exp": now + 3600,
         "kthid": "u100088",
         "username": "authlibuser",
@@ -416,3 +646,125 @@ def test_exchange_code_for_identity_authlib_client(monkeypatch):
 
     identity = asyncio.run(kth_oidc.exchange_code_for_identity("testcode", cfg))
     assert identity == {"kthid": "u100088", "username": "authlibuser"}
+
+
+def test_exchange_code_for_identity_custom_auth_method(monkeypatch):
+    """Verify exchange_code_for_identity respects configured token_auth_method."""
+    import asyncio
+    import time
+
+    from authlib.integrations.httpx_client import AsyncOAuth2Client
+    from joserfc import jwt
+    from joserfc.jwk import RSAKey
+
+    from student_bot.web import kth_oidc
+
+    captured_kwargs = {}
+    original_init = AsyncOAuth2Client.__init__
+
+    def wrapped_init(self, *args, **kwargs):
+        captured_kwargs.update(kwargs)
+        original_init(self, *args, **kwargs)
+
+    monkeypatch.setattr(AsyncOAuth2Client, "__init__", wrapped_init)
+
+    cfg = SSOConfig(
+        enabled=True,
+        client_id="test-client",
+        client_secret="test-secret",
+        token_auth_method="client_secret_post",
+        issuer="https://login.ug.kth.se/adfs",
+    )
+
+    priv_key = RSAKey.generate_key(2048, {"kid": "key1"})
+    pub_jwk = priv_key.as_dict()
+    jwks_data = {"keys": [pub_jwk]}
+
+    now = int(time.time())
+    payload = {
+        "iss": "https://login.ug.kth.se/adfs",
+        "aud": "test-client",
+        "sub": "u100088",
+        "iat": now,
+        "exp": now + 3600,
+        "kthid": "u100088",
+        "username": "authlibuser",
+    }
+    id_token = jwt.encode({"alg": "RS256", "kid": "key1"}, payload, priv_key)
+
+    async def mock_fetch_metadata(c):
+        return {
+            "token_endpoint": "https://login.ug.kth.se/adfs/oauth2/token",
+            "jwks_uri": "https://login.ug.kth.se/adfs/discovery/keys",
+        }
+
+    async def mock_fetch_jwks(uri):
+        return jwks_data
+
+    monkeypatch.setattr(kth_oidc, "fetch_oidc_metadata", mock_fetch_metadata)
+    monkeypatch.setattr(kth_oidc, "fetch_jwks", mock_fetch_jwks)
+
+    async def mock_fetch_token(self, url, code=None, grant_type=None, **kwargs):
+        return {"id_token": id_token, "access_token": "acc123", "token_type": "Bearer"}
+
+    monkeypatch.setattr(AsyncOAuth2Client, "fetch_token", mock_fetch_token)
+
+    asyncio.run(kth_oidc.exchange_code_for_identity("testcode", cfg))
+    assert captured_kwargs.get("token_endpoint_auth_method") == "client_secret_post"
+
+
+def test_exchange_code_fallback_to_access_token(monkeypatch):
+    """Verify exchange_code_for_identity extracts claims from access_token if id_token is omitted (ADFS mode)."""
+    import asyncio
+    import time
+
+    from authlib.integrations.httpx_client import AsyncOAuth2Client
+    from joserfc import jwt
+    from joserfc.jwk import RSAKey
+
+    from student_bot.web import kth_oidc
+
+    cfg = SSOConfig(
+        enabled=True,
+        client_id="test-client",
+        client_secret="test-secret",
+        redirect_uri="http://localhost:8000/auth/kth/callback",
+        issuer="https://login.ug.kth.se/adfs",
+    )
+
+    priv_key = RSAKey.generate_key(2048, {"kid": "key1"})
+    pub_jwk = priv_key.as_dict()
+    jwks_data = {"keys": [pub_jwk]}
+
+    now = int(time.time())
+    payload = {
+        "iss": "https://login.ug.kth.se/adfs",
+        "aud": "urn:microsoft:userinfo",
+        "sub": "u100077",
+        "iat": now,
+        "exp": now + 3600,
+        "kthid": "u100077",
+        "username": "adfsuser",
+    }
+    access_token_jwt = jwt.encode({"alg": "RS256", "kid": "key1"}, payload, priv_key)
+
+    async def mock_fetch_metadata(c):
+        return {
+            "token_endpoint": "https://login.ug.kth.se/adfs/oauth2/token",
+            "jwks_uri": "https://login.ug.kth.se/adfs/discovery/keys",
+        }
+
+    async def mock_fetch_jwks(uri):
+        return jwks_data
+
+    monkeypatch.setattr(kth_oidc, "fetch_oidc_metadata", mock_fetch_metadata)
+    monkeypatch.setattr(kth_oidc, "fetch_jwks", mock_fetch_jwks)
+
+    # Simulate KTH ADFS returning ONLY access_token and no id_token
+    async def mock_fetch_token(self, url, code=None, grant_type=None, **kwargs):
+        return {"access_token": access_token_jwt, "token_type": "Bearer"}
+
+    monkeypatch.setattr(AsyncOAuth2Client, "fetch_token", mock_fetch_token)
+
+    identity = asyncio.run(kth_oidc.exchange_code_for_identity("testcode", cfg))
+    assert identity == {"kthid": "u100077", "username": "adfsuser"}
