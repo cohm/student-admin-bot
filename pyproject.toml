@@ -11,7 +11,12 @@ dependencies = [
     "rich>=13.7",
 
     # Retrieval stack
-    "chromadb>=0.6.3,<1.6",
+    # Chroma 1.x is the Rust-core rewrite (chroma-hnswlib gone). The declared
+    # range said >=0.6.3,<1.6 while the lock already resolved 1.5.9 — so the
+    # floor permitted a silent resolve back to the 0.x client that production
+    # no longer runs. Floor at 1.5 to match reality. Existing persist dirs
+    # migrate in place on first open (prod made that jump 2026-09-09).
+    "chromadb>=1.5,<2",
     "sentence-transformers>=3.0",
     "torch>=2.3",
 
@@ -49,7 +54,12 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
-docling = ["docling>=2.0"]
+# Floor at 2.92 (the version this project has been locking) — with a lower
+# floor the resolver happily trades docling *down* to 2.87 in order to keep
+# websockets at 17.x, since docling-slim's `standard` extra requires
+# websockets<17. Nothing here needs websockets 17, docling freshness matters
+# more for PDF table parsing, so the floor makes that trade explicit.
+docling = ["docling>=2.92"]
 dev = [
     "pytest>=8.0",
     "ruff>=0.6",
@@ -72,6 +82,7 @@ student-bot-web = "student_bot.web.app:main"
 student-bot-reindex = "scripts.reindex:main"
 student-bot-stats = "scripts.stats:main"
 student-bot-mkuser = "scripts.mkuser:main"
+student-bot-backup = "scripts.backup:main"
 student-bot-jargon = "scripts.jargon:main"
 student-bot-audit-codes = "scripts.audit_course_code_patterns:main"
 student-bot-host-metrics = "scripts.host_metrics_collector:main"
@@ -90,3 +101,10 @@ packages = ["src/student_bot", "scripts", "eval"]
 [tool.ruff]
 line-length = 100
 target-version = "py311"
+
+[tool.ruff.lint]
+# ruff 0.16 widened its *default* rule set (BLE, FURB, RUF, SIM, ... ~136
+# findings here). Pin the historical scope explicitly so bumping ruff stays a
+# dependency update instead of a lint refactor. Opting into more rules is a
+# deliberate, separate change.
+select = ["E4", "E7", "E9", "F"]

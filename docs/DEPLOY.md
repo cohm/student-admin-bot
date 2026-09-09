@@ -157,3 +157,131 @@ When relocating (the new host also runs Tailscale):
    `WEB_ACCESS_TOKEN`, and create `data/web_users` **before** the server stays up.
 5. **Reindex** the corpus on the new host (`scripts/reindex.py`) — the Chroma
    index is host-specific (see `README.md` *Image notes* re: chromadb mismatch).
+
+---
+
+## Deploying: `scripts/deploy.sh`
+
+Run it **on the VM**, from the repo root, as the user that owns the checkout:
+
+```bash
+cd ~/student-admin-bot
+scripts/deploy.sh --status      # read-only: HEAD vs origin, last build, containers
+scripts/deploy.sh -n            # dry run: incoming commits + every check, changes nothing
+scripts/deploy.sh               # the real thing (prompts before it acts)
+```
+
+It fast-forwards to `origin/main`, **always** rebuilds the image, snapshots
+`data/` while the stack is down, restarts, and polls the web service. `--help`
+prints the full rationale; the short version is that each guard exists because
+the corresponding mistake has already been made here:
+
+| Guard | What it prevents |
+|---|---|
+| refuses a dirty checkout | a hand-edited prod tree aborting `git pull` mid-deploy (2026-09-09). It also reports whether the local edits are byte-identical to the incoming commit, i.e. safe to `git checkout -- .` |
+| `--ff-only`, never `git pull` | a merge commit appearing on the production checkout |
+| always `docker compose build` | `up -d` silently re-running the **old** image — the Dockerfile bakes `src/` and `uv sync --frozen`, so containers come up healthy on stale code |
+| chromadb **major** gate | `data/chroma` being migrated in place before you have a snapshot. Needs `--allow-chroma-migration`, and refuses to combine that with `--skip-backup` |
+| `.env.example` key diff | a new feature shipping dark because its env keys were never added to `.env` (exactly how `KTH_OIDC_*` arrived). Key **names** only — values are never read or logged |
+| SSO whitelist check | `KTH_OIDC_ENABLED=true` with an empty `data/web_users`, which 403s every KTH account |
+| health check | leaving a broken build running unnoticed |
+
+The health check treats **401/403 as healthy**: `/api/health` calls
+`require_access`, so an authenticated-by-design refusal still proves uvicorn is
+serving and the auth chain is wired. Only a connection failure or 5xx counts as
+down.
+
+**It deliberately does not reindex** — `scripts/reindex.py` is manual, slow, and
+rewrites the index; the script only tells you when the incoming range touched
+ingest code. It likewise reminds you to re-run `eval/run_eval.py` when
+retrieval, the gate, or the corpus changed, because the gate thresholds are
+model-specific and must be re-tuned rather than assumed.
+
+**Rollback** redeploys an earlier commit on a detached HEAD:
+
+```bash
+scripts/deploy.sh --rollback <sha>
+```
+
+That reverts *code*, not data. If the deploy you are undoing migrated
+`data/chroma`, restore the snapshot from `$BOT_BACKUP_DIR`
+(default `~/bot-deploy-backups`) as well — see below.
+
+The pre-deploy snapshot is plain `tar`, on purpose: the safety net must not
+depend on the image being current or the app being importable. For a snapshot
+you intend to keep or hand to someone, use `student-bot-backup --only chroma`
+instead — it adds checksums, a manifest, and an online SQLite copy.
+
+---
+
+## Backups, and handing a snapshot to a collaborator
+
+`uv run student-bot-backup` (`scripts/backup.py`) snapshots the on-disk state
+into a timestamped `.tar.gz` under `data/backups/`. SQLite files are copied via
+SQLite's **online backup API**, so the stack does not have to be stopped and any
+`-wal` contents are folded in. The Chroma **HNSW segment binaries** are plain
+files that `scripts/reindex.py` rewrites wholesale — stop the stack first
+(`uv run student-bot-down`) if a reindex might be running at the same time.
+
+Every archive carries a `MANIFEST.json` with a sha256 per file plus the
+**chromadb and Python versions that wrote the index** — which is exactly what
+decides whether a persist directory opens cleanly somewhere else.
+
+```bash
+uv run student-bot-backup                       # chroma + logs + web cache
+uv run student-bot-backup --only chroma         # vector index only
+uv run student-bot-backup --out /tmp            # write elsewhere
+uv run student-bot-backup --verify FILE.tar.gz  # re-check checksums (also works on the receiving end)
+```
+
+### ⚠️ Which parts may leave the host
+
+| component | contents | shareable? |
+|---|---|---|
+| `chroma` | vectors + text chunks of the **public** corpus (KTH pages, study plans) | **yes** |
+| `logs` | `qa_log.question` / `qa_log.answer` — **real student questions**, salted-hashed user ids | **no** — internal only |
+| `cache` | `web_cache.sqlite`, fetched public pages | yes, but rarely useful |
+
+So a snapshot for a fellow developer is always `--only chroma`. The script prints
+a warning when an archive contains `logs.sqlite`.
+
+### Recipe: prod index → another developer
+
+On the prod host, pick whichever of these fits how that host is set up — all
+three land the archive in `~/student-admin-bot/data/backups/`:
+
+```bash
+cd ~/student-admin-bot
+
+# a) host has uv + a synced venv
+uv run student-bot-backup --only chroma          # ~11 MB for the current corpus
+
+# b) no uv on the host — run it in the container (needs an image built after
+#    this script landed; `./data` is bind-mounted, so the output is on the host)
+docker compose run --rm beta-web student-bot-backup --only chroma
+
+# c) neither — plain tar. No MANIFEST/checksums, and stop the stack first if a
+#    reindex could be running: `docker compose stop bot beta-web`
+tar -czf data/backups/chroma-$(date +%F).tar.gz -C data chroma
+```
+
+Then, from your laptop:
+
+```bash
+scp cohm@chatbot:'~/student-admin-bot/data/backups/student-bot-backup-chroma-*.tar.gz' .
+```
+
+On the receiving side:
+
+```bash
+uv run student-bot-backup --verify student-bot-backup-chroma-*.tar.gz
+tar -xzf student-bot-backup-chroma-*.tar.gz
+cp -R data/chroma data/chroma.bak          # keep their own index first
+rm -rf data/chroma && mv student-bot-backup-chroma-*/chroma data/chroma
+uv run student-bot-cli "Vem är programansvarig för CTFYS?"
+```
+
+A prod index written by an **older chromadb** is migrated in place the first
+time a 1.x client opens it (see `README.md` *Image notes*), so this doubles as
+the check that a dev environment's dependency set can actually read prod data.
+`data/backups/` is gitignored.

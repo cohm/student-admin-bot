@@ -5,6 +5,8 @@ __pycache__/
 .DS_Store
 
 data/chroma/
+data/chroma.bak-*/
+data/backups/
 data/logs.sqlite
 data/logs.sqlite-*
 data/web_cache.sqlite

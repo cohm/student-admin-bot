@@ -16,6 +16,8 @@ Entry-point names come from `pyproject.toml` `[project.scripts]`; the `student-b
 - `uv run python -m eval.run_eval` (`--show-failures`) — recall@5 + gate accuracy. Does **not** call the LLM.
 - `uv run student-bot-stats [--since 7d]` — per-topic counts, latency, 👍/👎 ratios.
 - `uv run student-bot-mkuser <name>` — create a web auth user (scrypt).
+- `uv run student-bot-backup [--only chroma] [--verify FILE]` — snapshot `data/` (Chroma + SQLite, online-backup API, sha256 MANIFEST) into `data/backups/`. **`--only chroma` is the shareable subset**; a full archive contains `qa_log` student text.
+- `scripts/deploy.sh` — **production deploy** (run on the VM, not locally): ff-only pull → `docker compose build` → snapshot `data/` → restart → health check. `--status` is read-only; `-n` dry-runs; `--rollback <sha>` redeploys an earlier commit. Refuses a dirty checkout, and refuses a **chromadb major** change without `--allow-chroma-migration` (that migrates `data/chroma` in place, irreversibly). `--help` explains each guard.
 - `uv run student-bot-jargon list|proposals|accept|reject|add|remove` — manage `dictionary.json`.
 - `uv run ruff check .` / `uv run ruff format .` — line-length 100, target py311.
 - `uv run pytest -q` — the unit suite under `tests/` (~100 tests). Fast (~3 s); does **not** call the LLM or need Chroma/Ollama.
