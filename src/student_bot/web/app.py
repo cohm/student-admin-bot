@@ -75,6 +75,61 @@ def _mask_secret(value: str, *, keep: int = 6) -> str:
     return f"{value[:keep]}…"
 
 
+class _RedactAccessTokenAccessLog(logging.Filter):
+    """Mask `?access=<token>` in uvicorn access-log records.
+
+    When a user follows the capability URL `?access=<WEB_ACCESS_TOKEN>`,
+    uvicorn writes the full request line — including the token — to its
+    access log. Mask it so logs and log shipments can't be used to hijack a
+    session. Applied unconditionally; there's no operator benefit to seeing
+    the full token in the access log.
+
+    The redaction happens *inside* `record.args` rather than by collapsing
+    msg+args into a pre-formatted string. uvicorn's `AccessFormatter`
+    unpacks exactly five values from `record.args`:
+
+        (client_addr, method, full_path, http_version, status_code)
+
+    so clearing args raises `ValueError: not enough values to unpack` at
+    format time and the record is dropped — losing the access-log line for
+    precisely the requests that claim a session. Rewriting `full_path` in
+    place keeps the token out of the output *and* the line in the log.
+    """
+
+    _ACCESS_QS_RE = re.compile(r"(access=)[^&\s\"'\\]+")
+    # Shape of uvicorn's access-log record args, and the index of the
+    # element that carries the query string.
+    _UVICORN_ARGC = 5
+    _FULL_PATH_IDX = 2
+
+    def _sub(self, value: str) -> str:
+        return self._ACCESS_QS_RE.sub(r"\1<redacted>", value)
+
+    def filter(self, record: logging.LogRecord) -> bool:
+        args = record.args
+        if isinstance(args, tuple) and len(args) == self._UVICORN_ARGC:
+            full_path = args[self._FULL_PATH_IDX]
+            if isinstance(full_path, str):
+                redacted = self._sub(full_path)
+                if redacted != full_path:
+                    record.args = (
+                        *args[: self._FULL_PATH_IDX],
+                        redacted,
+                        *args[self._FULL_PATH_IDX + 1 :],
+                    )
+            return True
+
+        # Not uvicorn's access-record shape — a custom handler, or a record
+        # that arrived pre-formatted. Collapse msg+args so a later format
+        # pass can't reapply the original arguments and re-leak the token.
+        msg = record.getMessage()
+        redacted = self._sub(msg)
+        if redacted != msg:
+            record.msg = redacted
+            record.args = ()
+        return True
+
+
 WEB_PKG_DIR = Path(__file__).resolve().parent
 STATIC_DIR = WEB_PKG_DIR / "static"
 HOST_METRICS_FILE = Path("data/host_metrics.json")
@@ -1509,24 +1564,8 @@ def main(host: str | None, port: int | None, reload: bool):
 
         logging.getLogger("uvicorn.access").addFilter(_SuppressSystemLoadAccessLog())
 
-    # When a user follows the capability URL `?access=<WEB_ACCESS_TOKEN>`,
-    # uvicorn writes the full request line — including the token — to its
-    # access log. Mask the token so logs and log shipments can't be used to
-    # hijack a session. Applied unconditionally; there's no operator benefit
-    # to seeing the full token in the access log.
-    class _RedactAccessTokenAccessLog(logging.Filter):
-        _ACCESS_QS_RE = re.compile(r"(access=)[^&\s\"'\\]+")
-
-        def filter(self, record: logging.LogRecord) -> bool:
-            msg = record.getMessage()
-            redacted = self._ACCESS_QS_RE.sub(r"\1<redacted>", msg)
-            if redacted != msg:
-                # Replace msg+args so any later formatting doesn't reapply
-                # the original arguments (which would re-leak the token).
-                record.msg = redacted
-                record.args = ()
-            return True
-
+    # Mask `?access=<WEB_ACCESS_TOKEN>` in the access log (see the filter's
+    # docstring for why this rewrites args rather than the message).
     logging.getLogger("uvicorn.access").addFilter(_RedactAccessTokenAccessLog())
 
     cfg = get_config()
