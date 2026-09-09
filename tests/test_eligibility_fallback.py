@@ -212,17 +212,29 @@ def test_fallback_fills_missing_block_from_prior_cohort(stub_network, cfg, patte
     fallback = [c for c in chunks if "fallback" in (c.chunk_id or "")]
     assert len(fallback) == 1
     c = fallback[0]
-    # Citation hygiene: the section_path and doc_title must name the prior
-    # cohort so the user knows which läsår the answer was sourced from.
+    # Citation hygiene: both must name the PRIOR cohort, never the requested
+    # one, so the user can see which läsår the answer was sourced from. They
+    # spell it differently on purpose: section_path uses the full term label
+    # (HT2023), while _study_plan_title_with_kull rewrites doc_title to the
+    # site's own admission-cohort form ("…, Utbildningsplan kull HT23"),
+    # derived from the prior term's URL. "HT23" is not a substring of
+    # "HT2023", so these assertions cannot pass by accident.
     assert "HT2023" in c.section_path
-    assert "HT2023" in c.doc_title
+    assert "HT2024" not in c.section_path
+    assert "kull HT23" in c.doc_title
+    assert "HT24" not in c.doc_title
     # Caveat must be in the chunk text — it's what the LLM reproduces.
     assert "OBS!" in c.text
     assert "HT2023" in c.text and "HT2024" in c.text
     assert "studievägledaren" in c.text.lower()
     # The user-facing source URL points at the *prior* cohort so click-through
-    # lands on the actual page that has the block.
-    assert c.source_url == "https://www.kth.se/student/kurser/program/CTFYS/20232/arskurs3"
+    # lands on the study plan that actually has the block. It is the bundle
+    # base, with the /arskurs3 sidebar suffix stripped by
+    # _studyplan_bundle_base_url: the KTH SPA renders the same JSON on every
+    # sidebar route, so a per-section deep link would mislead a user who
+    # opened it expecting to find that section. rel_source keeps the fragment.
+    assert c.source_url == "https://www.kth.se/student/kurser/program/CTFYS/20232"
+    assert "20232/arskurs3" in c.rel_source
     # And the eligibility data itself made it through extraction.
     assert "DD2352" in c.text
     assert "SF1679" in c.text
