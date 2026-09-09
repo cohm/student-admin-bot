@@ -141,27 +141,32 @@ def _expected_token() -> str | None:
 
 
 def check_token_grant(request: Request, cfg: Config) -> bool:
-    """Returns True if the request has a valid session-grant cookie OR
-    presents a valid `?access=<token>` query param (in which case the cookie
-    is set on the response by the middleware)."""
+    """Returns True if the request has a valid session-grant cookie, an active
+    KTH SSO session, OR presents a valid `?access=<token>` query param."""
     if not cfg.web.auth_enabled:
         return True
 
-    expected = _expected_token()
-    if not expected:
-        # Auth enabled but no token configured — fail closed.
-        return False
-
     sess = request.session
+    kth_user = sess.get("kth_user")
     granted_at = sess.get("granted_at", 0)
     idle = cfg.web.session_idle_minutes * 60
+
     if granted_at and (time.time() - granted_at) <= idle:
         # Refresh sliding window on each successful gate check.
         sess["granted_at"] = time.time()
         return True
+    elif granted_at and (time.time() - granted_at) > idle:
+        # Session expired
+        sess.pop("kth_user", None)
+        sess.pop("granted_at", None)
+
+    expected = _expected_token()
+    if not expected and not kth_user:
+        # Auth enabled but no token configured and no SSO session — fail closed.
+        return False
 
     token = request.query_params.get("access", "")
-    if token and hmac.compare_digest(token, expected):
+    if expected and token and hmac.compare_digest(token, expected):
         sess["granted_at"] = time.time()
         return True
 
@@ -200,6 +205,24 @@ def basic_auth(request: Request, cfg: Config) -> tuple[str, bool] | None:
 
 def require_access(request: Request, cfg: Config) -> AuthContext:
     """Enforce both gates. Raises HTTPException on failure."""
+    # Check for active KTH SSO session
+    kth_user = request.session.get("kth_user")
+    if isinstance(kth_user, dict):
+        kth_name = kth_user.get("username") or kth_user.get("kthid") or "sso_user"
+        user_id_str = f"kth:{kth_name}"
+        is_admin = False
+        if cfg.web.users_file:
+            users_path = cfg.absolute(Path(cfg.web.users_file))
+            users = load_users_file(users_path)
+            info = users.get(kth_name) or users.get(kth_user.get("kthid", ""))
+            if not info:
+                raise HTTPException(
+                    status_code=status.HTTP_403_FORBIDDEN,
+                    detail=f"Åtkomst nekad: KTH-kontot '{kth_name}' finns inte i listan över tillåtna användare.",
+                )
+            is_admin = info.is_admin
+        return AuthContext(True, user_id_str, True, request.session.get("name"), is_admin)
+
     if not cfg.web.auth_enabled:
         return AuthContext(False, "anonymous", True, request.session.get("name"), False)
 
@@ -208,6 +231,7 @@ def require_access(request: Request, cfg: Config) -> AuthContext:
             status_code=status.HTTP_403_FORBIDDEN,
             detail="Missing or invalid access token. Use the link you were given.",
         )
+
     auth_info = basic_auth(request, cfg)
     if not auth_info:
         raise HTTPException(
