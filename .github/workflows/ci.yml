@@ -30,7 +30,7 @@ jobs:
         run: uv run ruff format --check .
 
   build:
-    name: Build + import smoke test (Python ${{ matrix.python-version }})
+    name: Tests + build (Python ${{ matrix.python-version }})
     runs-on: ubuntu-latest
     strategy:
       fail-fast: false
@@ -55,6 +55,17 @@ jobs:
       # ImportError without needing the corpus, Chroma index, or Ollama.
       - name: Smoke import (CLI --help)
         run: uv run student-bot-cli --help
+
+      # Runs on both supported Pythons because this job already syncs the dev
+      # extra for each. The suite is unit-level — fixtures only, no LLM, no
+      # Chroma, no Ollama — and takes a few seconds.
+      #
+      # Added late: the suite existed but nothing ran it, so
+      # test_fallback_fills_missing_block_from_prior_cohort stayed red for four
+      # months after a deliberate citation-format change landed under it. A
+      # test suite nobody runs is documentation, not a gate.
+      - name: Unit tests
+        run: uv run pytest -q
 
       - name: Build sdist + wheel
         run: uv build
