@@ -151,6 +151,8 @@ uv run student-bot-up --build
 uv run student-bot-up --dev
 # helper: stops beta-web + bot
 uv run student-bot-down
+# snapshot data/ (Chroma index + SQLite) into data/backups/ — see docs/DEPLOY.md
+uv run student-bot-backup --only chroma
 ```
 
 Logs (**stderr only**; there are no rotating web log files in the container):
@@ -187,6 +189,7 @@ Docker Desktop runs Linux in a **VM**: total Docker RAM in Activity Monitor is o
 ### Image notes
 
 - The image uses **Python 3.12** (aligned with **`requires-python`** in **`pyproject.toml`**) and **`uv sync --frozen`** against **`uv.lock`**, so the container’s **chromadb** build matches local **`uv sync`** installs. If you still see Chroma errors like **`metadata segment`** / **`INTEGER` vs `BLOB`**, the host **`./data/chroma`** directory was likely written by a different client: stop the stack, remove **`./data/chroma`**, then **`docker compose run --rm bot python -m scripts.reindex`**.
+- **Upgrading from chromadb 0.6.x → 1.x** (the Rust-core rewrite, `chroma-hnswlib` is gone): an existing **`./data/chroma`** is migrated **in place** the first time a 1.x client opens it — no reindex needed, but back the directory up first (`cp -R data/chroma data/chroma.bak-0.6.3`). A 0.6.3 client can still read the migrated directory, so a rollback does not force a rebuild.
 - The Dockerfile installs **`torch`** from **CPU-only** wheels for Linux (see **`pyproject.toml`** **`[tool.uv.sources]`** / PyTorch CPU index) so the image does not pull NVIDIA CUDA packages.
 - **`topics.yaml`** and **`data/dictionary.json`** are **`COPY`**’d into the image as a fallback for non-compose runs. Compose host-mounts **`config.yaml`**, **`./data`** (which contains the dictionary, proposals, logs, Chroma + index, and web users), and the corpus on top, so jargon proposals submitted via the running bot/web and the host’s **`student-bot-jargon`** CLI share the same files.
 

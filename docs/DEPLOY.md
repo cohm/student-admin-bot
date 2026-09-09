@@ -157,3 +157,77 @@ When relocating (the new host also runs Tailscale):
    `WEB_ACCESS_TOKEN`, and create `data/web_users` **before** the server stays up.
 5. **Reindex** the corpus on the new host (`scripts/reindex.py`) — the Chroma
    index is host-specific (see `README.md` *Image notes* re: chromadb mismatch).
+
+---
+
+## Backups, and handing a snapshot to a collaborator
+
+`uv run student-bot-backup` (`scripts/backup.py`) snapshots the on-disk state
+into a timestamped `.tar.gz` under `data/backups/`. SQLite files are copied via
+SQLite's **online backup API**, so the stack does not have to be stopped and any
+`-wal` contents are folded in. The Chroma **HNSW segment binaries** are plain
+files that `scripts/reindex.py` rewrites wholesale — stop the stack first
+(`uv run student-bot-down`) if a reindex might be running at the same time.
+
+Every archive carries a `MANIFEST.json` with a sha256 per file plus the
+**chromadb and Python versions that wrote the index** — which is exactly what
+decides whether a persist directory opens cleanly somewhere else.
+
+```bash
+uv run student-bot-backup                       # chroma + logs + web cache
+uv run student-bot-backup --only chroma         # vector index only
+uv run student-bot-backup --out /tmp            # write elsewhere
+uv run student-bot-backup --verify FILE.tar.gz  # re-check checksums (also works on the receiving end)
+```
+
+### ⚠️ Which parts may leave the host
+
+| component | contents | shareable? |
+|---|---|---|
+| `chroma` | vectors + text chunks of the **public** corpus (KTH pages, study plans) | **yes** |
+| `logs` | `qa_log.question` / `qa_log.answer` — **real student questions**, salted-hashed user ids | **no** — internal only |
+| `cache` | `web_cache.sqlite`, fetched public pages | yes, but rarely useful |
+
+So a snapshot for a fellow developer is always `--only chroma`. The script prints
+a warning when an archive contains `logs.sqlite`.
+
+### Recipe: prod index → another developer
+
+On the prod host, pick whichever of these fits how that host is set up — all
+three land the archive in `~/student-admin-bot/data/backups/`:
+
+```bash
+cd ~/student-admin-bot
+
+# a) host has uv + a synced venv
+uv run student-bot-backup --only chroma          # ~11 MB for the current corpus
+
+# b) no uv on the host — run it in the container (needs an image built after
+#    this script landed; `./data` is bind-mounted, so the output is on the host)
+docker compose run --rm beta-web student-bot-backup --only chroma
+
+# c) neither — plain tar. No MANIFEST/checksums, and stop the stack first if a
+#    reindex could be running: `docker compose stop bot beta-web`
+tar -czf data/backups/chroma-$(date +%F).tar.gz -C data chroma
+```
+
+Then, from your laptop:
+
+```bash
+scp cohm@chatbot:'~/student-admin-bot/data/backups/student-bot-backup-chroma-*.tar.gz' .
+```
+
+On the receiving side:
+
+```bash
+uv run student-bot-backup --verify student-bot-backup-chroma-*.tar.gz
+tar -xzf student-bot-backup-chroma-*.tar.gz
+cp -R data/chroma data/chroma.bak          # keep their own index first
+rm -rf data/chroma && mv student-bot-backup-chroma-*/chroma data/chroma
+uv run student-bot-cli "Vem är programansvarig för CTFYS?"
+```
+
+A prod index written by an **older chromadb** is migrated in place the first
+time a 1.x client opens it (see `README.md` *Image notes*), so this doubles as
+the check that a dev environment's dependency set can actually read prod data.
+`data/backups/` is gitignored.
