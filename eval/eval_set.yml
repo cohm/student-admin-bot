@@ -275,3 +275,42 @@
 - question: "Where can I buy concert tickets in Stockholm?"
   lang: en
   kind: out_of_domain
+
+# ---------------- programme codes -> PA pages (added 2026-09-10) ----------------
+# The PA lists for ABE, CBH and SCI name programmes only ("#### Farkostteknik"),
+# while EECS and ITM also print the code. Code-only questions therefore worked
+# for two schools and were refused for three, until programme-code expansion
+# resolved the code to its official name for retrieval.
+#
+# The label is the PA list, deliberately NOT sci-utbildningskansli-
+# studievagledning: that page does contain "Farkostteknik (CFATE)", but only
+# offers a generic studievagledare@sci.kth.se address. It outranks the PA list
+# today, which is worth seeing as a failure if it ever costs us recall.
+#
+# Substrings are hash-free URL stems, so a re-scrape (which changes the
+# -<sha10> suffix) does not silently break these cases.
+
+- question: "Vem är PA för CFATE?"
+  lang: sv
+  kind: in_domain
+  expected_doc_substring: "ansvariga-for-grundutbildningen-pa-sci"
+  notes: "SCI lists programmes by name only; needs CFATE -> farkostteknik expansion."
+
+- question: "vem är programansvarig för cfate?"
+  lang: sv
+  kind: in_domain
+  expected_doc_substring: "ansvariga-for-grundutbildningen-pa-sci"
+  notes: "Lowercase code. The original [A-Z]{5} matcher skipped these entirely."
+
+- question: "Who is the programme director for CFATE?"
+  lang: en
+  kind: in_domain
+  expected_doc_substring: "ansvariga-for-grundutbildningen-pa-sci"
+  notes: "English query against a Swedish-only page; expansion supplies the name."
+
+- question: "Vem är PA för CINEK?"
+  lang: sv
+  kind: in_domain
+  expected_doc_substring: "ansvariga-for-grundutbildningen-pa-itm"
+  notes: "Control: ITM prints codes, so this worked before expansion too. Guards against a fix for the name-only schools breaking the schools that were fine."
+
