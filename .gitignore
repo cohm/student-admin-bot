@@ -6,10 +6,18 @@ __pycache__/
 
 data/chroma/
 data/chroma.bak-*/
+data/chroma-*/
 data/backups/
-data/logs.sqlite
-data/logs.sqlite-*
-data/web_cache.sqlite
+# Written by scripts/deploy.sh after a successful build, per checkout.
+.deploy-state
+# Scratch configs for replaying prod data against a local checkout.
+config-*.yaml
+# Any SQLite database under data/ — glob rather than per-file, because the
+# per-file rules did not cover ad-hoc copies (data/logs-prod.sqlite,
+# logs-snap.sqlite, ...) and qa_log holds real student question text.
+data/*.sqlite
+data/*.sqlite-*
+data/*.sqlite3
 data/web_users
 data/course_code_pattern_audit.json
 data/host_metrics.json
