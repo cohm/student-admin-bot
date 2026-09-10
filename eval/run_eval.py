@@ -22,6 +22,7 @@ from rich.console import Console
 from rich.table import Table
 
 from student_bot.bot.gate import evaluate as evaluate_gate
+from student_bot.bot.pipeline import build_retrieval_query
 from student_bot.bot.retrieval import retrieve
 from student_bot.config import PROJECT_ROOT, get_config
 from student_bot.jargon import Jargon
@@ -83,10 +84,10 @@ def main(eval_file: Path, show_failures: bool):
     for entry in entries:
         q = entry["question"]
         kind = entry["kind"]
-        if jargon is not None:
-            q_used, _ = jargon.expand_query(q, lang=entry.get("lang"))
-        else:
-            q_used = q
+        # Same expansion the pipeline applies (jargon + programme codes), via
+        # the shared helper — scoring a different string than production
+        # retrieves on is how programme-code expansion stayed invisible here.
+        q_used, _, _ = build_retrieval_query(cfg, q, entry.get("lang"), jargon=jargon)
         result = retrieve(cfg, q_used, query_language=entry.get("lang"))
         gate = evaluate_gate(cfg, result)
 

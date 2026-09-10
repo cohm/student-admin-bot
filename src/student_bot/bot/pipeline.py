@@ -57,6 +57,124 @@ log = logging.getLogger("student_bot")
 
 
 _jargon_cache: dict[int, Jargon] = {}
+
+# Programme codes that are also words people actually write, where the
+# verbatim uppercase form is required so an ordinary sentence is not read as
+# a programme code. "How many times can I retake an exam?" is a perfectly
+# normal English question, and TIMES is a real code (maskinteknik och
+# ekonomi); MEDIA (medieteknik) is the same story in both languages.
+#
+# Screening the 318 codes against /usr/share/dict/words also flagged COPEN,
+# but that list is web2 (Webster's 1934, 236k entries — it has "zyzzogeton"
+# and "thole"), and "copen" is an archaic colour term nobody types. It is
+# deliberately NOT guarded: "copen-programmet" should resolve like any other
+# code. Judge additions by whether a student would plausibly write the word,
+# not by whether some dictionary lists it.
+#
+# This is a frozen list, not derived at runtime: the wordlist does not exist
+# in the Docker image. A new KTH code that collides with a common word would
+# need adding here by hand.
+_AMBIGUOUS_PROGRAM_CODES = frozenset({"MEDIA", "TIMES"})
+
+_PROGRAM_CODE_RE = re.compile(r"\b[A-Za-z]{5}\b")
+
+
+def _resolve_program_codes(cfg: Config, text: str) -> dict[str, str]:
+    """Map programme codes appearing in `text` to their official long names.
+
+    Matching is case-insensitive: students type "ctfys" about as often as
+    "CTFYS", and the uppercase-only form this replaced silently skipped the
+    lowercase half. Candidate tokens are filtered against the alias table
+    scraped from `kth.se/student/kurser/kurser-inom-program`, so an ordinary
+    five-letter word cannot be mistaken for a code — except for the few that
+    genuinely are words (see `_AMBIGUOUS_PROGRAM_CODES`).
+
+    Returns {CODE: official long name}. The longest alias is the official
+    name; the shorter ones are nicknames and the code itself.
+    """
+    if not text:
+        return {}
+    tokens = set(_PROGRAM_CODE_RE.findall(text))
+    if not tokens:
+        return {}
+    try:
+        from student_bot.bot.web_retrieval import _get_program_aliases
+
+        aliases = _get_program_aliases(cfg)
+    except Exception as e:  # alias table is best-effort; never break a query
+        log.warning("failed to load program aliases: %s", e)
+        return {}
+
+    wanted = {
+        tok.upper()
+        for tok in tokens
+        if not (tok.upper() in _AMBIGUOUS_PROGRAM_CODES and tok != tok.upper())
+    }
+    code_to_name: dict[str, str] = {}
+    for alias, code in aliases.items():
+        code_upper = str(code).upper()
+        if code_upper not in wanted or alias.upper() == code_upper:
+            continue
+        if len(alias) > len(code_to_name.get(code_upper, "")):
+            code_to_name[code_upper] = alias
+    return code_to_name
+
+
+def _expand_program_codes(text: str, code_to_name: dict[str, str]) -> str:
+    """Inline each programme code's official name, mirroring the jargon
+    convention: "CTFYS" -> "CTFYS (Civilingenjörsutbildning i teknisk fysik)".
+
+    The code itself is preserved because the dynamic-web router keys off it.
+    Each code is expanded only once, so a query that repeats a code does not
+    accumulate duplicate names.
+    """
+    emitted: set[str] = set()
+
+    def repl(m: re.Match) -> str:
+        code = m.group(0).upper()
+        name = code_to_name.get(code)
+        if not name or code in emitted:
+            return m.group(0)
+        emitted.add(code)
+        return f"{m.group(0)} ({name.strip().capitalize()})"
+
+    return _PROGRAM_CODE_RE.sub(repl, text)
+
+
+def build_retrieval_query(
+    cfg: Config,
+    text: str,
+    lang: str | None,
+    *,
+    jargon: Jargon | None = None,
+) -> tuple[str, list[JargonEntry], dict[str, str]]:
+    """Build the query string retrieval actually sees.
+
+    Two expansions, in order: jargon ("PA" -> "PA (programansvarig)") and
+    programme codes ("CFATE" -> "CFATE (Civilingenjörsutbildning i
+    farkostteknik)"). Both keep the original surface form, so downstream
+    consumers that key off the raw token — notably the dynamic-web router —
+    still see it.
+
+    Shared with `eval/run_eval.py` deliberately. The harness used to apply
+    jargon expansion only, so it scored a different string than production
+    retrieved on and could not see programme-code expansion at all. Anything
+    that changes the retrieval query belongs here, not in either caller.
+
+    Returns (expanded query, jargon hits, {CODE: official name}). Callers use
+    the latter two to build the prompt glossary; retrieval needs only the
+    first.
+    """
+    expanded = text
+    hits: list[JargonEntry] = []
+    if jargon is not None:
+        expanded, hits = jargon.expand_query(text, lang=lang)
+    code_to_name = _resolve_program_codes(cfg, text)
+    if code_to_name:
+        expanded = _expand_program_codes(expanded, code_to_name)
+    return expanded, hits, code_to_name
+
+
 _COURSE_CODE_TOKEN_RE = re.compile(r"^(?:[A-Z]{2}[0-9]{4}|[A-Z]{2}[0-9]{3}[A-Z])$")
 _PROGRAM_CODE_TOKEN_RE = re.compile(r"^[A-Z]{5}$")
 
@@ -564,58 +682,35 @@ def answer(
         history, programme_followup_merged
     )
 
-    # --- jargon: expand query for retrieval, build glossary for prompt ---
+    # --- expand query for retrieval, build glossary for prompt ---
     jargon = _jargon(cfg)
-    expanded_q = contextual_q
-    jargon_hits: list[JargonEntry] = []
+    expanded_q, jargon_hits, code_to_name = build_retrieval_query(
+        cfg, contextual_q, lang, jargon=jargon
+    )
     glossary_md = ""
     jargon_note = ""
-    if jargon is not None:
-        expanded_q, jargon_hits = jargon.expand_query(contextual_q, lang=lang)
-        if jargon_hits:
-            glossary_md = jargon.glossary_block(
-                jargon_hits,
-                lang,
-                max_entries=cfg.jargon.max_glossary_entries,
-            )
-            jargon_note = jargon.transparency_note(jargon_hits, lang)
+    if jargon is not None and jargon_hits:
+        glossary_md = jargon.glossary_block(
+            jargon_hits,
+            lang,
+            max_entries=cfg.jargon.max_glossary_entries,
+        )
+        jargon_note = jargon.transparency_note(jargon_hits, lang)
 
-    # Look up program codes in query to add them to the glossary dynamically
-    prog_codes_in_q = {w for w in re.findall(r"\b([A-Z]{5})\b", contextual_q)}
-    if prog_codes_in_q:
-        try:
-            from student_bot.bot.web_retrieval import _get_program_aliases
-
-            aliases = _get_program_aliases(cfg)
-            # Find the official long name mapped to each code
-            code_to_name = {}
-            for alias, code in aliases.items():
-                code_upper = str(code).upper()
-                if code_upper in prog_codes_in_q:
-                    if alias.upper() == code_upper:
-                        continue
-                    current_best = code_to_name.get(code_upper, "")
-                    if len(alias) > len(current_best):
-                        code_to_name[code_upper] = alias
-
-            # Build dynamic glossary entries
-            if code_to_name:
-                dynamic_entries = []
-                for code_upper, name in code_to_name.items():
-                    display_name = name.strip()
-                    if display_name:
-                        display_name = display_name.capitalize()
-                    dynamic_entries.append(f"- {code_upper} = {display_name}")
-
-                # Append to the prompt's glossary block
-                if dynamic_entries:
-                    label = "Ordlista" if lang == "sv" else "Glossary"
-                    if not glossary_md:
-                        glossary_md = f"{label}:\n" + "\n".join(dynamic_entries)
-                    else:
-                        glossary_md += "\n" + "\n".join(dynamic_entries)
-        except Exception as e:
-            log.warning("failed to inject program aliases into glossary: %s", e)
+    # Codes resolved above also go into the prompt glossary, so the model can
+    # name the programme it is answering about.
+    if code_to_name:
+        dynamic_entries = [
+            f"- {code} = {name.strip().capitalize()}"
+            for code, name in code_to_name.items()
+            if name.strip()
+        ]
+        if dynamic_entries:
+            label = "Ordlista" if lang == "sv" else "Glossary"
+            if not glossary_md:
+                glossary_md = f"{label}:\n" + "\n".join(dynamic_entries)
+            else:
+                glossary_md += "\n" + "\n".join(dynamic_entries)
 
     web_result = maybe_fetch_dynamic_web(
         cfg,
