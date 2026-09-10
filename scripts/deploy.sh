@@ -59,6 +59,12 @@
 #   BOT_BACKUP_DIR    Where pre-deploy snapshots go. Default: ~/bot-deploy-backups
 #   BOT_STATE_FILE    Records the commit last built here, so staleness can be
 #                     judged exactly rather than guessed from image mtimes.
+#   BOT_MIN_FREE_GB   Refuse to build below this much free space. Default: 8.
+#                     Each build costs roughly 5 GB of cache on this host.
+#   BOT_PRUNE_CACHE   Set to 0 to skip pruning build cache after a successful
+#                     deploy. Default: on.
+#   BOT_CACHE_KEEP_HOURS
+#                     Age above which build cache is pruned. Default: 168 (7d).
 #
 # USAGE
 #   scripts/deploy.sh                      # the normal path
@@ -112,7 +118,14 @@ BUILD_PATHS=(
 # match the code. Never auto-acted on; surfaced as a reminder.
 INGEST_PATHS=(src/student_bot/ingest scripts/reindex.py)
 EVAL_PATHS=(src/student_bot/bot/retrieval.py src/student_bot/bot/gate.py
+            src/student_bot/bot/pipeline.py src/student_bot/bot/web_retrieval.py
             src/student_bot/ingest/embed.py docs/corpus)
+# pipeline.py and web_retrieval.py are listed because they build the query the
+# reranker scores — programme-code and jargon expansion live there, and a
+# change to either moves top1 across the board without touching retrieval.py.
+# config.yaml also matters (embedding model, reranker, gate thresholds) but is
+# deliberately absent: it changes on most deploys, and a reminder that always
+# fires is a reminder nobody reads.
 
 die()  { printf '\n[FATAL] %s\n' "$*" >&2; exit 1; }
 info() { printf '[deploy] %s\n' "$*"; }
@@ -149,6 +162,30 @@ command -v git    >/dev/null || die "git not found in PATH"
 command -v curl   >/dev/null || die "curl not found (needed for the health check)"
 command -v docker >/dev/null || die "docker not found in PATH"
 docker compose version >/dev/null 2>&1 || die "'docker compose' is unavailable"
+
+# A full disk fails deep inside `docker compose build`, after minutes of work,
+# with a layer-export error that reads like a Docker bug rather than a full
+# disk. Check up front instead. Real numbers from this host: build cache grew
+# to 11.2 GB over two builds on a 30 GB disk, so roughly 5 GB per build.
+MIN_FREE_GB="${BOT_MIN_FREE_GB:-8}"
+check_free_space() {
+  local target avail_kb avail_gb
+  # Docker writes images and cache under its own root, which may live on a
+  # different filesystem than the checkout.
+  target="$(docker info --format '{{.DockerRootDir}}' 2>/dev/null || true)"
+  [[ -d "${target:-}" ]] || target="$REPO_ROOT"
+  avail_kb="$(df -Pk "$target" 2>/dev/null | awk 'NR==2 {print $4}')" || return 0
+  [[ "$avail_kb" =~ ^[0-9]+$ ]] || return 0
+  avail_gb=$(( avail_kb / 1024 / 1024 ))
+  info "free space on $target: ${avail_gb} GB"
+  if (( avail_gb < MIN_FREE_GB )); then
+    die "only ${avail_gb} GB free on $target, want >= ${MIN_FREE_GB} GB.
+        Reclaim build cache first (this is usually the bulk of it):
+            docker builder prune -f
+            docker image prune -f
+        Override the threshold with BOT_MIN_FREE_GB if you know better."
+  fi
+}
 
 info "repository: $REPO_ROOT"
 info "services:   $SERVICES"
@@ -276,6 +313,7 @@ take_backup() {
 # Build + restart + verify. Shared by the deploy, rebuild and rollback paths.
 # ---------------------------------------------------------------------------
 build_and_restart() {
+  check_free_space
   # Build first, while the old stack still serves: this is the slow step and
   # it needs no downtime. Only then stop, snapshot, and bring the new one up.
   step "Building image"
@@ -327,6 +365,15 @@ build_and_restart() {
 
   step "Container status"
   docker compose ps
+
+  # Only after a green health check: keep recent cache so an immediate
+  # re-deploy is still fast, drop the rest. Non-fatal — an old Docker without
+  # this filter must not fail a deploy that has already succeeded.
+  if [[ "${BOT_PRUNE_CACHE:-1}" != "0" ]]; then
+    step "Pruning build cache older than ${BOT_CACHE_KEEP_HOURS:-168}h"
+    docker builder prune -f --filter "until=${BOT_CACHE_KEEP_HOURS:-168}h" \
+      || warn "build cache prune failed (harmless); run 'docker builder prune -f' by hand"
+  fi
 }
 
 # ---------------------------------------------------------------------------
