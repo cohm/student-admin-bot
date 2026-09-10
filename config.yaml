@@ -157,6 +157,29 @@ llm:
     # as `delta.reasoning_content` (verified — LiteLLM normalizes it the same way
     # as Qwen, NOT as inline `<|channel>` blocks), so `openai_reasoning_field`
     # filters it out correctly.
+    # MoE variant: 26B total, ~4B active per token. The hypothesis is much
+    # lower time-to-first-token than the dense 31b — TTFT is 63% of `llm_ms`
+    # and ~16 s at p50 on a ~3,300-token prompt, so prefill dominates what a
+    # student waits for. Answer quality is the thing to watch, not speed.
+    # Measure from `qa_log` grouped by `llm_model` (ttft_ms, gen_tps) before
+    # trusting it; trial it with LLM_ACTIVE in .env rather than by changing
+    # `active` below, so a rollback needs no deploy.
+    "litellm/gemma4-26b-a4b":
+      num_ctx: 65536
+      temperature: 0.2
+      max_tokens: 2048
+      thinking: false
+      thinking_style: none
+    # Reasoning variant of the same MoE. Registered for parity with the other
+    # pairs, but NOT the one to make active here: chain-of-thought is emitted
+    # before the answer, which pushes time-to-visible-answer the wrong way —
+    # and lower TTFT is the entire reason for trying this model.
+    "litellm/gemma4-26b-a4b-think":
+      num_ctx: 65536
+      temperature: 0.2
+      max_tokens: 2048
+      thinking: true
+      thinking_style: openai_reasoning_field
     "litellm/gemma4-31b-mtp":
       num_ctx: 65536
       temperature: 0.2
