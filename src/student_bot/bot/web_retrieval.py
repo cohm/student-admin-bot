@@ -298,6 +298,40 @@ def _is_civilingenjor_code(code: str, cfg: Config | None = None) -> bool:
     return bool(_CIV_CODE_HEURISTIC_RE.match(upper))
 
 
+# Who holds a role on a programme — programansvarig, studievägledare,
+# studierektor — does not vary by the asker's admission cohort. The bot used to
+# answer "which admission round applies to you?" to "Vem är PA för CFATE?",
+# which is unanswerable-by-design: there is no cohort-specific answer to give.
+# 24 such questions in the logs to 2026-09-10, none of them thumbed up.
+_ROLE_LOOKUP_RE = re.compile(
+    r"(programansvarig\w*|studiev[äa]gledar\w*|studierektor\w*"
+    r"|program\s*(?:director|manager|ansvarig)"
+    r"|vem\s+(?:är|ar|ansvarar)\b"
+    r"|who(?:'s|\s+is)\s+(?:the\s+)?(?:responsible|programme?\b|program\s)"
+    r"|ansvarig\s+f[öo]r)",
+    re.IGNORECASE,
+)
+# `PA` only as a verbatim uppercase abbreviation: lowercase "pa" is a typo for
+# the very common Swedish "på" and would match half the corpus of questions.
+_PA_ABBREV_RE = re.compile(r"\bPA\b")
+
+# What a programme *is* — its code, its full name, what it covers, how it
+# differs from another — is cohort-invariant in every practical sense. These
+# were being asked for an admission round before being told what the programme
+# was, which is the wrong way round.
+_PROGRAMME_IDENTITY_RE = re.compile(
+    r"(programkod\w*|programme?\s*code"
+    r"|fullst[äa]ndig\w*\s+namn\w*|full\s+name"
+    r"|ber[äa]tta\s+mer|tell\s+me\s+(?:more|about)"
+    r"|sammanfatta|summari[sz]e"
+    r"|skillnad\w*|difference\s+between"
+    r"|vad\s+heter|vad\s+st[åa]r\s+\w+\s+f[öo]r\b"
+    r"|fokuserar\s+p[åa]|focus(?:es)?\s+on"
+    r"|vad\s+finns\s+det\s+f[öo]r\s+program|vilka\s+program\w*\s+finns)",
+    re.IGNORECASE,
+)
+
+
 def _question_is_year_independent(q: str) -> bool:
     """True for question shapes whose answers don't vary by admission year.
 
@@ -314,6 +348,10 @@ def _question_is_year_independent(q: str) -> bool:
         # imply a cohort, but they've added enough specificity that we should
         # stay on the regular admission-term track.
         return False
+    if _ROLE_LOOKUP_RE.search(text) or _PA_ABBREV_RE.search(text):
+        return True
+    if _PROGRAMME_IDENTITY_RE.search(text):
+        return True
     if _MASTER_MAPPING_RE.search(text):
         return True
     if _MASTER_TOKEN_RE.search(text) and _ELIGIBILITY_TOKEN_RE.search(text):
@@ -2431,6 +2469,28 @@ def _resolve_multi_program_candidates(
         return _MultiCandidateResolution(
             queue_urls=[f"https://{_KTH_HOST}/student/kurser/program/{code}"],
             resolved_code=code,
+        )
+
+    # Asking "which one did you mean?" is only useful when the student has in
+    # fact left it open. Two shapes where they have not:
+    #
+    #   * they typed every candidate code themselves — "Vad är CTFYS och
+    #     TTFYM?" names both, so there is nothing to disambiguate; the question
+    #     is comparative and wants an answer about all of them;
+    #   * they are asking what the set contains — "Vad finns det för program om
+    #     teknisk fysik?" — where demanding they pick one first is circular.
+    #
+    # Both were logged asking for clarification and thumbed down for it.
+    codes = [code for code, _, _ in candidates]
+    all_typed = bool(verbatim_typed) and all(c in verbatim_typed for c in codes)
+    if all_typed or _PROGRAMME_IDENTITY_RE.search(question or ""):
+        log.info(
+            "dynamic-web: answering about all %d candidates without asking (%s)",
+            len(codes),
+            "codes typed verbatim" if all_typed else "question is about the set",
+        )
+        return _MultiCandidateResolution(
+            queue_urls=[f"https://{_KTH_HOST}/student/kurser/program/{code}" for code in codes]
         )
 
     sv, en = _build_multi_program_clarification(candidates, aliases)
