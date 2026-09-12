@@ -22,6 +22,26 @@ WHY RECALL IS THE ONLY CRITICAL
     is a statement about whether the right document is still reachable at all,
     and it is exactly the signal that caught KTH moving the ITM programansvariga
     list to intra.kth.se on 2026-09-12 (35 chunks -> 5).
+
+WHY SCORE DISTRIBUTIONS ARE NOT COMPARED AT ALL
+    They jitter between runs on a loaded host. Two prod evals on 2026-09-12
+    bracketing a reindex that changed nothing (`upserted=0 deleted=0`, same
+    collection size) differed in exactly two numbers: the OOD minimums for top1
+    (-6.108 -> -6.878) and meanK (-6.897 -> -7.011). Everything else — every
+    in-domain distribution, the OOD median and max, every count — was identical,
+    so it was one off-topic query landing on a different candidate set.
+
+    The index was ruled out: a no-op reindex leaves the HNSW binaries
+    byte-identical (only chroma.sqlite3 changes, from opening the collection for
+    write), and locally four consecutive evals — including one either side of a
+    no-op reindex — agree on every field. What is left is float
+    non-determinism, which shows up first on off-topic queries because they sit
+    in a flat low-similarity region where candidate ordering is fragile.
+
+    It cannot change a verdict: those scores are ~-6 against a gate threshold of
+    -0.5. Reporting it would be a weekly alert about noise, so the numbers ride
+    along in the report's table for a human to eyeball and nothing branches on
+    them.
 """
 
 from __future__ import annotations
