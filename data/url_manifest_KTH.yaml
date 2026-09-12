@@ -224,3 +224,50 @@ entries:
     exclude_patterns: []
     type_hint: auto
     doc_title_override: ""
+
+  # --- Outward-facing programme descriptions (added 2026-09-12) ---
+  #
+  # The corpus had no answer to "what IS this programme?". Asked about CTFYS,
+  # CINEK, CMAST, CLGYM or CFATE, retrieval returned administrative metadata
+  # *about* the programme — the PA contact page, another programme's master
+  # mapping table — and passed the gate on it. The descriptions live on these
+  # outward-facing pages, which are server-rendered and scrape cleanly.
+  #
+  # THE STUDY PLANS REMAIN AUTHORITATIVE. These pages also carry master
+  # mappings and eligibility claims, and those can be outdated or wrong here.
+  # `exclude_sections` drops them at ingest, so they never reach the index and
+  # cannot outrank the steering documents. That is deliberate: study-plan
+  # chunks are re-scored by the cross-encoder like everything else, so there
+  # is no score floor protecting them — corpus chunks have been measured at
+  # +4.5 against their +3.5 synthetic start.
+  #
+  # follow_links MUST stay false. The page links to a "Kurser och
+  # masterprogram" sub-page that contains exactly the mapping tables excluded
+  # here; following links would pull them straight back in.
+  #
+  # Start with one programme. Widen to the rest via
+  # https://www.kth.se/utbildning/hitta only after confirming that
+  # descriptive questions improve and that master-mapping questions still
+  # resolve to the study plan.
+  - url: https://www.kth.se/utbildning/civilingenjor/teknisk-fysik
+    follow_links: false
+    max_depth: 1
+    include_patterns: []
+    exclude_patterns: []
+    type_hint: html
+    doc_title_override: ""
+    exclude_sections: &programme_page_exclusions
+      # Authoritative elsewhere — study plans own these.
+      - "masterprogram"
+      - "beh[öo]righet"
+      # Aimed at applicants, not enrolled students.
+      - "s[åa] s[öo]ker du"
+      - "antas via"
+      # Time-sensitive; goes stale between re-scrapes.
+      - "viktiga datum"
+      # Marketing.
+      - "tj[äa]nar"
+      - "vad tycker studenter"
+      - "studentliv"
+      - "mottagning"
+
