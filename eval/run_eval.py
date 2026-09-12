@@ -9,11 +9,19 @@ Outputs:
     OOD refuse-rate)
 
 Does not call the LLM; retrieval + gate only.
+
+`--json-out PATH` additionally writes the same numbers in machine-readable
+form. That is what the weekly maintenance job (`scripts/maintain.sh`) diffs
+before and after a scrape+reindex — parsing the rich table would break the
+moment somebody adds a row to it.
 """
 
 from __future__ import annotations
 
+import json
+import os
 import statistics
+from datetime import datetime, timezone
 from pathlib import Path
 
 import click
@@ -25,6 +33,7 @@ from student_bot.bot.gate import evaluate as evaluate_gate
 from student_bot.bot.pipeline import build_retrieval_query
 from student_bot.bot.retrieval import retrieve
 from student_bot.config import PROJECT_ROOT, get_config
+from student_bot.ingest.embed import get_chroma_collection
 from student_bot.jargon import Jargon
 
 
@@ -43,6 +52,17 @@ def _matches_expected(rel_sources: list[str], entry: dict) -> bool:
     return False
 
 
+def _distribution(scores: list[float]) -> dict[str, float] | None:
+    """min / median / max, or None for an empty set (JSON null, not 0.0)."""
+    if not scores:
+        return None
+    return {
+        "min": round(min(scores), 4),
+        "median": round(statistics.median(scores), 4),
+        "max": round(max(scores), 4),
+    }
+
+
 def _suggest_threshold(in_scores: list[float], ood_scores: list[float]) -> float:
     """Pick the lowest in-domain score above the highest OOD score, if separable.
     Otherwise return the OOD median + 0.05 as a permissive starting point."""
@@ -58,12 +78,74 @@ def _suggest_threshold(in_scores: list[float], ood_scores: list[float]) -> float
     return statistics.median(ood_scores) + 0.05
 
 
+def _collection_size(cfg) -> int | None:
+    """Chunks currently in Chroma. None if the collection can't be opened —
+    a missing number must not fail an eval that otherwise completed."""
+    try:
+        return get_chroma_collection(cfg).count()
+    except Exception:
+        return None
+
+
+def build_report(
+    cfg,
+    *,
+    collection_size: int | None,
+    in_total: int,
+    ood_total: int,
+    recall_hits: int,
+    in_pass: int,
+    ood_refuse: int,
+    in_top1: list[float],
+    in_meanK: list[float],
+    ood_top1: list[float],
+    ood_meanK: list[float],
+    recall_failures: list[str],
+    refusals: list[str],
+) -> dict:
+    """Assemble the machine-readable run report.
+
+    `recall_failures` and `refusals` carry the questions themselves, not just
+    counts: when a weekly reindex loses a page, "which question stopped
+    working" is the whole diagnosis, and a count alone would send you back to
+    re-running the eval by hand to find out.
+    """
+    return {
+        "schema": 1,
+        "generated_at": datetime.now(timezone.utc).isoformat(timespec="seconds"),
+        "version": os.environ.get("STUDENT_BOT_VERSION") or None,
+        "collection_size": collection_size,
+        "thresholds": {
+            "rerank_top1_min": cfg.gate.rerank_top1_min,
+            "rerank_meanK_min": cfg.gate.rerank_meanK_min,
+        },
+        "counts": {"in_domain": in_total, "ood": ood_total},
+        "recall_at_5": {"hits": recall_hits, "total": in_total},
+        "gate": {
+            "in_domain_pass": in_pass,
+            "in_domain_total": in_total,
+            "ood_refuse": ood_refuse,
+            "ood_total": ood_total,
+        },
+        "top1": {"in_domain": _distribution(in_top1), "ood": _distribution(ood_top1)},
+        "meanK": {"in_domain": _distribution(in_meanK), "ood": _distribution(ood_meanK)},
+        "recall_failures": recall_failures,
+        "in_domain_refusals": refusals,
+    }
+
+
 @click.command()
 @click.option("--eval-file", type=click.Path(path_type=Path), default=EVAL_FILE)
 @click.option(
     "--show-failures", is_flag=True, help="Print details for queries that miss expected doc."
 )
-def main(eval_file: Path, show_failures: bool):
+@click.option(
+    "--json-out",
+    type=click.Path(path_type=Path, dir_okay=False),
+    default=None,
+    help="Also write the metrics as JSON, for machine comparison between runs.",
+)
+def main(eval_file: Path, show_failures: bool, json_out: Path | None):
     cfg = get_config()
     console = Console()
     entries: list[dict] = yaml.safe_load(eval_file.read_text(encoding="utf-8"))
@@ -80,6 +162,7 @@ def main(eval_file: Path, show_failures: bool):
     in_pass = 0
     ood_refuse = 0
     failures: list[tuple[str, list[str]]] = []
+    refused: list[str] = []
 
     for entry in entries:
         q = entry["question"]
@@ -102,6 +185,8 @@ def main(eval_file: Path, show_failures: bool):
                 failures.append((q, rel_sources))
             if gate.passed:
                 in_pass += 1
+            else:
+                refused.append(q)
         else:
             ood_top1.append(gate.top1)
             ood_meanK.append(gate.meanK)
@@ -156,6 +241,26 @@ def main(eval_file: Path, show_failures: bool):
             console.print(f"  Q: {q}")
             for s in srcs:
                 console.print(f"    - {s}")
+
+    if json_out is not None:
+        payload = build_report(
+            cfg,
+            collection_size=_collection_size(cfg),
+            in_total=in_total,
+            ood_total=len(ood_top1),
+            recall_hits=in_recall_hits,
+            in_pass=in_pass,
+            ood_refuse=ood_refuse,
+            in_top1=in_top1,
+            in_meanK=in_meanK,
+            ood_top1=ood_top1,
+            ood_meanK=ood_meanK,
+            recall_failures=[q for q, _ in failures],
+            refusals=refused,
+        )
+        json_out.parent.mkdir(parents=True, exist_ok=True)
+        json_out.write_text(json.dumps(payload, indent=2, ensure_ascii=False) + "\n", "utf-8")
+        console.print(f"[dim]wrote {json_out}[/dim]")
 
 
 if __name__ == "__main__":

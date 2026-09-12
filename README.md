@@ -570,6 +570,28 @@ uv run student-bot-fetch-url-corpus     # reads data/url_manifest.yaml
 uv run python -m scripts.reindex
 ```
 
+#### Reindexing a running stack
+
+A reindex performed by another process is **not** picked up by services that
+are already running. Chroma reads a collection's HNSW segment into memory the
+first time that process queries it and does not reload it afterwards, so the
+bot keeps answering from the vectors it had at startup.
+
+What makes this worth a paragraph is that nothing looks wrong. `count()` reads
+SQLite and does climb to the new number, and `eval/run_eval.py` — a fresh
+process each run — measures the *new* index and reports it green, while the
+old one is what students are hitting. Opening a new Chroma client in the same
+process does not help; chromadb caches the System per persist directory.
+
+So always restart after reindexing:
+
+```bash
+docker compose restart web mattermost
+```
+
+Verified against chromadb 1.5.9. `tests/test_chroma_reload.py` pins it, so a
+future version that reloads external writes shows up as a failing test.
+
 Config (`config.yaml` → `url_ingest`) controls:
 
 - domain allowlist for ingest/crawl (`domains_ingest_allowlist`)
@@ -645,7 +667,9 @@ answer.
 - **No multi-account isolation in the web UI.** The auth gate is for
   trusted-colleague testing, not for production tenancy.
 - **No real-time index updates.** Re-run `scripts/reindex.py` after corpus
-  changes; consider a cron if the corpus updates often.
+  changes — and **restart the services afterwards**, or they keep serving the
+  index they loaded at startup (see "Reindexing a running stack" below).
+  `scripts/maintain.sh` does the whole cycle weekly on prod.
 
 ---
 

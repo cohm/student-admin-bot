@@ -8,6 +8,8 @@ data/chroma/
 data/chroma.bak-*/
 data/chroma-*/
 data/backups/
+# Eval reports + logs written by scripts/maintain.sh on prod.
+data/maintenance/
 # Written by scripts/deploy.sh after a successful build, per checkout.
 .deploy-state
 # Scratch configs for replaying prod data against a local checkout.

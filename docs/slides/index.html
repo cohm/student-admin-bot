@@ -968,7 +968,9 @@ Always cite sources inline using the format [Doc title · Section].
             </ul>
           </div>
           <p style="font-size: 0.8em; color: var(--kth-gray-dark); margin-top: 0.6em;">
-            Reindex is a manual command: <code>uv run python -m scripts.reindex</code>.
+            Reindex is a manual command &mdash; <code>uv run python -m scripts.reindex</code>
+            &mdash; plus a weekly scrape/reindex/eval job on prod that reports to Mattermost
+            if recall@5 drops.
           </p>
         </div>
       </div>

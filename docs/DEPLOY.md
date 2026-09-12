@@ -259,7 +259,23 @@ cd ~/student-admin-bot
 docker compose run --rm scrape                          # scrape -> docs/corpus
 docker compose run --rm web python -m scripts.reindex   # corpus -> data/chroma
 docker compose run --rm web python -m eval.run_eval     # confirm nothing broke
+docker compose restart web mattermost                   # REQUIRED — see below
 ```
+
+Or let `scripts/maintain.sh` do all four with a before/after comparison — see
+[Weekly corpus maintenance](#weekly-corpus-maintenance-scriptsmaintainsh).
+
+**The restart is not optional.** A reindex run by another process is invisible
+to the services already running. Chroma loads a collection's HNSW segment into
+memory the first time that process queries it and never reloads it, so `web`
+and `mattermost` keep answering from the index they had at startup. The trap is
+that nothing looks wrong: `count()` reads SQLite and does climb to the new
+number, and an eval — a fresh container every time — reports the *new* index
+and comes back green while students are still being served the old one.
+Opening a new Chroma client inside the same process does not help either;
+chromadb caches the System per persist directory. Verified against chromadb
+1.5.9; `tests/test_chroma_reload.py` pins the behaviour so a future version
+that fixes it shows up as a failing test rather than as folklore.
 
 **Why a separate `scrape` service.** `web` and `mattermost` mount the corpus
 `:ro`, because a running app must never modify its own knowledge base. The
@@ -272,12 +288,168 @@ it.
 KTH restructures a page: on 2026-09-12 the ITM programansvariga list moved to
 intra.kth.se and that page dropped from 35 chunks to 5, which would have
 quietly broken every "who is PA for ..." question. Recall@5 caught it. Expect
-`43/43`; if it is lower, run with `--show-failures` and look at what moved
-before doing anything else.
+`44/45` as of v0.1.1; if it is lower, run with `--show-failures` and look at
+what moved before doing anything else.
 
 Files written this way are root-owned, which is fine here because every corpus
 operation on this host goes through a container. On a host that does have
 `uv`, prefer `uv run student-bot-fetch-url-corpus` so ownership stays sane.
+
+## Weekly corpus maintenance: `scripts/maintain.sh`
+
+The four commands above, unattended and with a verdict. Cron entry:
+
+```cron
+# Weekly corpus refresh, Sunday 04:00.
+0 4 * * 0 cd $HOME/student-admin-bot && scripts/maintain.sh \
+    >> $HOME/bot-maintenance.log 2>&1
+```
+
+**Why 04:00 and not the 02:17–03:00 gap.** Squeezing the run between the
+nightly backup and the host snapshot would make the schedule load-bearing:
+correct only as long as every run stays under ~40 minutes, which a catch-up
+after a month of corpus drift does not (21 m 31 s is already on record for a
+single large import). Starting after the host snapshot removes the constraint
+entirely — nothing downstream is waiting, so a long run costs nothing. What is
+left is a *duration* check: `BOT_MAINT_MAX_MINUTES` (default 45) puts a note in
+the report when a run takes several times the ~9 minute steady state, which
+means something is stuck rather than merely busy.
+
+Order of operations, and why:
+
+1. **eval (baseline)** — `--json-out`, so the comparison is machine-readable.
+2. **snapshot** `student-bot-backup --only chroma --keep 4`. Rotation counts
+   per component set, so these never age out the nightly full archives.
+3. **scrape** in the `scrape` service (the corpus is `:ro` everywhere else).
+4. **reindex**, in place.
+5. **eval (after)**, into a second JSON.
+6. **restart** `web mattermost` — see the corpus-refresh section above; without
+   this the reindex is invisible to the running services.
+7. **compare and report** via `scripts/eval_compare.py`, sent by
+   `student-bot-notify` to every configured channel.
+
+**Why the eval runs twice.** Running it only afterwards tells you the index got
+worse, not what made it worse. With a baseline taken minutes earlier, the
+corpus is the only thing that changed in between, so a drop is attributable to
+the scrape rather than to whatever was merged that week.
+
+**Why it reports instead of rolling back.** `scripts/reindex.py` rebuilds
+`data/chroma` in place, so by the time the second eval runs the new index is
+already on disk. Staging it elsewhere and promoting only on green is the
+stricter design, but it doubles the index on a 30 GB VM that has already
+filled once — and the failure it guards against is recoverable in seconds from
+the step-2 snapshot. So the job never decides to roll back on its own; it puts
+the exact restore command in the report.
+
+Exit codes, which are also the notification's headline:
+
+| code | meaning |
+|---|---|
+| 0 | green |
+| 2 | warnings — churn, a swapped recall failure, a gate wobble |
+| 3 | recall@5 fell: the index lost something it used to find |
+| 1 | the run itself failed (scrape, reindex, docker, lock held) |
+
+Only recall@5 is critical. Gate pass-rate and OOD refuse-rate move with
+cross-encoder scores, which are unbounded and drift slightly with any corpus
+change; treating every wobble as critical trains you to ignore the alert.
+Recall is a statement about whether the right document is reachable at all.
+
+### Notification channels
+
+Every configured channel gets every notification at or above `min_severity` —
+there is no primary and no fallback. Two are supported, and running both is the
+intended starting point: the comparison is what decides which one stays.
+
+```yaml
+# config.yaml
+notify:
+  mattermost_target: "@chohm"   # or "#bot-ops"; empty disables
+  ntfy_server: "https://ntfy.sh"
+  min_severity: "ok"            # ok | warn | critical
+```
+
+**Mattermost** posts as the bot account. The credentials are already in `.env`,
+so there is no webhook URL to provision or rotate, and the report lands where
+the bot's other conversations are. `student-bot-notify` is a separate entry
+point from the bot on purpose: the job has to be able to report that the bot is
+broken.
+
+**ntfy** is what actually reaches a phone at 04:00, when a Mattermost DM would
+sit unread until morning. Severity maps to ntfy's priority, so a recall drop
+rings through a silenced phone (`5`) while a green week stays below default
+(`2`):
+
+| verdict | priority | tag |
+|---|---:|---|
+| green | 2 | ✅ |
+| warnings | 4 | ⚠️ |
+| recall dropped / run failed | 5 | 🚨 |
+
+**Point it at the self-hosted instance** on the docker-private VM — the
+existing one; nothing new to run. Both the server and the topic go in `.env`,
+not `config.yaml`: the topic is effectively a password (knowing it is enough to
+read *and* publish), and an internal hostname does not belong in a file that is
+committed to a **public** repository.
+
+```bash
+# .env on the prod VM
+NTFY_SERVER=https://ntfy.example.internal     # or http://100.x.y.z on the tailnet
+NTFY_TOPIC=<the existing topic>
+NTFY_TOKEN=                                   # if the server requires auth
+NTFY_CA_BUNDLE=                               # only for a private CA
+```
+
+Empty `NTFY_TOPIC` disables the channel. Unset `NTFY_SERVER` falls back to
+`https://ntfy.sh`.
+
+Three things to check for a self-hosted server:
+
+- **Reachability from inside the container**, which is not the same as from the
+  VM's shell. A tailnet address works through the host's routing, but verify
+  rather than assume:
+  `docker compose run --rm web python -c "import httpx; print(httpx.get('$NTFY_SERVER/v1/health', timeout=5).text)"`
+- **Auth**, if the server runs `auth-default-access: deny-all`. Mint a token
+  with `ntfy token add <user>` and put it in `NTFY_TOKEN`; without it the
+  publish fails with 403 — loudly, in the job's log, not silently.
+- **TLS**, if it sits behind a private CA. Point `NTFY_CA_BUNDLE` at the root.
+  Certificate verification is never disabled, only redirected.
+
+Plain `http://` is fine on the tailnet or the LAN and the code stays quiet
+about it. To a public host it warns, because the topic travels in the URL path
+and is a publish credential. (Tailscale's `100.64/10` needed an explicit case:
+Python's `ipaddress` does not report CGNAT addresses as private, so the check
+would otherwise have nagged about a perfectly sound tailnet setup.)
+
+**What may be sent this way.** The report is built from `eval/eval_set.yml`
+(checked into the repo) plus chunk counts — no `qa_log` text. Self-hosted, that
+keeps it inside our own infrastructure; it is also what would have made
+ntfy.sh acceptable. Anything that would quote real student questions needs the
+self-hosted server, and a second look.
+
+Check the wiring without sending anything real:
+
+```bash
+docker compose run --rm web student-bot-notify -n --severity critical \
+    --message 'test'
+```
+
+Then send one for real, to confirm it arrives on the phone:
+
+```bash
+docker compose run --rm web student-bot-notify --severity critical \
+    --message 'test from prod'
+```
+
+`min_severity` starts at `ok` so both channels see identical traffic while you
+compare them. Once that is settled, a weekly all-green push is the kind of
+notification people learn to swipe away — `warn` is the likely resting place
+for ntfy. An explicit `--to` always sends regardless of the floor.
+
+Useful flags: `-n` (guards and plan, no side effects), `--no-notify` (run for
+real, print the report instead of posting), `--skip-scrape` (reindex from the
+corpus already on disk). A lock under `data/maintenance/` stops two runs from
+rewriting `data/chroma` at once.
 
 ## Backups, and handing a snapshot to a collaborator
 
@@ -329,10 +501,9 @@ Notes:
 
 - The SQLite files are copied through SQLite's online backup API, so the stack
   keeps running. The Chroma HNSW `.bin` files are plain files, so **this must
-  not overlap a reindex** — once a weekly reindex job exists, put it on a
-  different night. The window here is genuinely narrow: the backup starts at
-  02:17 and the host snapshot starts at 03:00, so a long reindex has nowhere
-  to sit between them.
+  not overlap a reindex**. The weekly maintenance run is scheduled at 04:00,
+  well clear of both this backup and the 03:00 host snapshot, so no schedule
+  arithmetic has to hold for either to be safe.
 - The container runs as root, so archives are root-owned on the host. Reading
   and `scp` are fine; removing one by hand needs `sudo`.
 - Full archives contain `qa_log` student text and must stay on this host. The

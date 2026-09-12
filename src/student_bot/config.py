@@ -199,6 +199,43 @@ class MattermostConfig(BaseModel):
     use_attachments: bool = False
 
 
+class NotifyConfig(BaseModel):
+    """Where unattended jobs report (see `scripts/notify.py`).
+
+    Every configured channel receives every notification at or above
+    `min_severity`; there is no primary/fallback relationship. Running two at
+    once is the point for now — a Mattermost DM is where the bot's other
+    conversations are, while ntfy actually reaches a phone at 04:00 — and the
+    comparison decides which one stays.
+
+    NOTHING HERE MAY CARRY STUDENT TEXT. The maintenance report is built from
+    `eval/eval_set.yml` (checked in) plus chunk counts, so it is safe to hand
+    to a third-party push service. If a future report starts quoting `qa_log`,
+    ntfy has to go, or be restricted to a self-hosted server.
+    """
+
+    # "@username" is a DM, "#channel-name" a channel. Empty disables the
+    # channel — the notifier refuses rather than guessing, because a
+    # maintenance alert posted into the wrong channel is worse than one that
+    # loudly fails to send.
+    mattermost_target: str = ""
+
+    # ntfy.sh-compatible push. Neither the topic nor, usually, the server
+    # belongs in this file: the topic is a shared secret (on a public server,
+    # knowing it is enough to both read and publish), and a SELF-HOSTED
+    # server's hostname is internal infrastructure — this repository is
+    # public. Both come from .env (NTFY_TOPIC, NTFY_SERVER); the default here
+    # is only a fallback for someone using the public instance.
+    ntfy_server: str = "https://ntfy.sh"
+    ntfy_timeout_seconds: float = 10.0
+
+    # Lowest severity worth sending: "ok" | "warn" | "critical". Start at "ok"
+    # so both channels can be compared on identical traffic; once that is
+    # settled, a weekly "all green" push is the kind of notification people
+    # learn to swipe away, so "warn" is the likely resting place for ntfy.
+    min_severity: str = "ok"
+
+
 class LoggingConfig(BaseModel):
     retain_days: int = 90
 
@@ -351,12 +388,21 @@ class Config(BaseModel):
     web: WebConfig = Field(default_factory=WebConfig)
     topics: TopicsConfig = Field(default_factory=TopicsConfig)
     jargon: JargonConfig = Field(default_factory=JargonConfig)
+    notify: NotifyConfig = Field(default_factory=NotifyConfig)
     dynamic_web: DynamicWebConfig = Field(default_factory=DynamicWebConfig)
     url_ingest: UrlIngestConfig = Field(default_factory=UrlIngestConfig)
 
     # Secrets injected from env (only required when actually used).
     user_id_hash_salt: str | None = None
     mattermost_secrets: MattermostSecrets | None = None
+    # ntfy topic and (optional) bearer token, from NTFY_TOPIC / NTFY_TOKEN.
+    # SecretStr so a stray `repr(cfg)` in a log cannot hand someone the topic —
+    # on a public ntfy server that is enough to publish to it.
+    ntfy_topic: SecretStr | None = None
+    ntfy_token: SecretStr | None = None
+    # PEM bundle for a self-hosted ntfy behind a private CA. Certificate
+    # verification is never disabled; point this at the CA instead.
+    ntfy_ca_bundle: Path | None = None
     # Bearer tokens for OpenAI-compatible cloud providers, keyed by the
     # provider name (e.g. `"berget"` → SecretStr). The loader populates
     # this dict from each provider's `api_key_env`. SecretStr keeps the
@@ -465,6 +511,18 @@ def get_config() -> Config:
             token=mm_token,
             team=os.environ.get("MATTERMOST_TEAM") or None,
         )
+
+    # ntfy push, for unattended jobs. Topic (and token, for a protected or
+    # self-hosted server) live in .env, never in the committed config.
+    if ntfy_topic := os.environ.get("NTFY_TOPIC"):
+        cfg.ntfy_topic = SecretStr(ntfy_topic.strip())
+    if ntfy_token := os.environ.get("NTFY_TOKEN"):
+        cfg.ntfy_token = SecretStr(ntfy_token.strip())
+    # Self-hosted server, kept out of the committed (and public) config.yaml.
+    if ntfy_server := os.environ.get("NTFY_SERVER"):
+        cfg.notify.ntfy_server = ntfy_server.strip()
+    if ntfy_ca := os.environ.get("NTFY_CA_BUNDLE"):
+        cfg.ntfy_ca_bundle = Path(ntfy_ca).expanduser()
 
     # Override the local Ollama URL without editing yaml (Docker / launchd).
     if ollama_url := os.environ.get("OLLAMA_URL"):
