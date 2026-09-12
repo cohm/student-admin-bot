@@ -27,6 +27,7 @@ from __future__ import annotations
 import hashlib
 import json
 import platform
+import re
 import shutil
 import sqlite3
 import sys
@@ -111,6 +112,34 @@ def _verify(console: Console, archive: Path) -> int:
     return 0
 
 
+_ARCHIVE_RE = re.compile(r"^student-bot-backup-(?P<components>[a-z+]+)-\d{8}-\d{6}\.tar\.gz$")
+
+
+def archives_to_prune(existing: list[str], keep: int) -> list[str]:
+    """Return the archive names to delete so that `keep` newest remain.
+
+    Rotation is per component-set, so a nightly `--only chroma` run never
+    counts against, or deletes, the full archives taken before a deploy — they
+    are different things with different retention needs.
+
+    The timestamp is embedded in the name and is UTC and zero-padded, so
+    lexical order is chronological; no stat() call is needed, which also means
+    a restored or copied file cannot be aged out by its mtime.
+    """
+    if keep <= 0:
+        return []
+    by_components: dict[str, list[str]] = {}
+    for name in existing:
+        m = _ARCHIVE_RE.match(name)
+        if m:
+            by_components.setdefault(m.group("components"), []).append(name)
+    doomed: list[str] = []
+    for names in by_components.values():
+        names.sort(reverse=True)  # newest first
+        doomed.extend(names[keep:])
+    return sorted(doomed)
+
+
 @click.command()
 @click.option(
     "--only",
@@ -126,13 +155,30 @@ def _verify(console: Console, archive: Path) -> int:
 )
 @click.option("--no-archive", is_flag=True, help="Leave the staging directory; skip the tarball.")
 @click.option(
+    "--keep",
+    type=int,
+    default=0,
+    show_default=True,
+    help=(
+        "After writing, delete older archives so only this many remain "
+        "(counted per component-set). 0 disables pruning. Use --keep 3 for the "
+        "nightly job; leave it off for one-off or pre-deploy snapshots."
+    ),
+)
+@click.option(
     "--verify",
     "verify_path",
     type=click.Path(dir_okay=False, path_type=Path),
     default=None,
     help="Verify an existing archive against its MANIFEST.json and exit.",
 )
-def main(only: tuple[str, ...], out: Path | None, no_archive: bool, verify_path: Path | None):
+def main(
+    only: tuple[str, ...],
+    out: Path | None,
+    no_archive: bool,
+    keep: int,
+    verify_path: Path | None,
+):
     console = Console()
     if verify_path is not None:
         sys.exit(_verify(console, verify_path))
@@ -214,3 +260,13 @@ def main(only: tuple[str, ...], out: Path | None, no_archive: bool, verify_path:
             "keep this archive internal (use --only chroma to share)[/yellow]"
         )
     console.print(f"verify with: uv run student-bot-backup --verify {target}")
+
+    # Prune only after the new archive is safely on disk, so a failure above
+    # never costs us the old ones too.
+    if keep > 0 and not no_archive:
+        names = [p.name for p in dest_root.glob("student-bot-backup-*.tar.gz")]
+        doomed = archives_to_prune(names, keep)
+        for name in doomed:
+            (dest_root / name).unlink()
+        if doomed:
+            console.print(f"pruned {len(doomed)} archive(s), keeping the {keep} newest")

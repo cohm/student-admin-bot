@@ -234,6 +234,47 @@ uv run student-bot-backup --out /tmp            # write elsewhere
 uv run student-bot-backup --verify FILE.tar.gz  # re-check checksums (also works on the receiving end)
 ```
 
+### Nightly rolling backup on prod
+
+The host machine snapshots the VMs themselves **from 03:00**, and that is the
+real safety net. These in-VM archives exist only so a bad reindex or deploy
+can be reverted in seconds without going to the host, so three is plenty.
+
+`--keep N` prunes older archives after a successful write, so a cron entry is
+the whole mechanism. Rotation counts **per component set**, so a nightly
+`--only chroma` run never ages out the full pre-deploy snapshots
+`scripts/deploy.sh` takes — they are different things kept for different
+reasons.
+
+Run it in the container: the host may not have `uv`, and `./data` is
+bind-mounted so the archive lands on the host either way.
+
+```cron
+# 3-deep rolling full backup, 02:17 nightly — finishes well before the host
+# snapshots this VM at 03:00, so that snapshot contains a complete archive.
+17 2 * * * cd $HOME/student-admin-bot && docker compose run --rm beta-web \
+    student-bot-backup --keep 3 >> $HOME/bot-backup.log 2>&1
+```
+
+**Back up everything, not just Chroma.** `data/chroma` can always be rebuilt
+with `scripts.reindex`; `logs.sqlite` cannot — it is the only irreplaceable
+thing on the host. A full archive is ~10 MB, so three is ~30 MB.
+
+Notes:
+
+- The SQLite files are copied through SQLite's online backup API, so the stack
+  keeps running. The Chroma HNSW `.bin` files are plain files, so **this must
+  not overlap a reindex** — once a weekly reindex job exists, put it on a
+  different night. The window here is genuinely narrow: the backup starts at
+  02:17 and the host snapshot starts at 03:00, so a long reindex has nowhere
+  to sit between them.
+- The container runs as root, so archives are root-owned on the host. Reading
+  and `scp` are fine; removing one by hand needs `sudo`.
+- Full archives contain `qa_log` student text and must stay on this host. The
+  script prints a warning to that effect on every run.
+- Restore is a plain extract; verify first:
+  `uv run student-bot-backup --verify <archive>`.
+
 ### ⚠️ Which parts may leave the host
 
 | component | contents | shareable? |
