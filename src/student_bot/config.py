@@ -218,6 +218,13 @@ class NotifyConfig(BaseModel):
     # channel — the notifier refuses rather than guessing, because a
     # maintenance alert posted into the wrong channel is worse than one that
     # loudly fails to send.
+    #
+    # Who to notify is per-HOST, not per-project: prod reports to its
+    # maintainer, a second VM would report to someone else. Override with
+    # NOTIFY_MATTERMOST_TARGET in .env rather than editing this file on the
+    # server — a hand-edited config.yaml in a production checkout makes it
+    # dirty, which blocks `git pull --ff-only` and is refused outright by
+    # scripts/deploy.sh. That has already cost one deploy on this host.
     mattermost_target: str = ""
 
     # ntfy.sh-compatible push. Neither the topic nor, usually, the server
@@ -518,7 +525,10 @@ def get_config() -> Config:
         cfg.ntfy_topic = SecretStr(ntfy_topic.strip())
     if ntfy_token := os.environ.get("NTFY_TOKEN"):
         cfg.ntfy_token = SecretStr(ntfy_token.strip())
-    # Self-hosted server, kept out of the committed (and public) config.yaml.
+    # Per-host notification settings, kept out of the committed (and public)
+    # config.yaml so a production checkout stays clean — see NotifyConfig.
+    if mm_target := os.environ.get("NOTIFY_MATTERMOST_TARGET"):
+        cfg.notify.mattermost_target = mm_target.strip()
     if ntfy_server := os.environ.get("NTFY_SERVER"):
         cfg.notify.ntfy_server = ntfy_server.strip()
     if ntfy_ca := os.environ.get("NTFY_CA_BUNDLE"):

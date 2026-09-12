@@ -242,6 +242,10 @@ mattermost:
 # Where unattended jobs (scripts/maintain.sh) report. Every configured channel
 # gets every notification at or above min_severity — no primary/fallback.
 notify:
+  # Left empty on purpose: who to notify is per-host, so prod sets
+  # NOTIFY_MATTERMOST_TARGET in .env instead. Editing this file on a server
+  # makes the checkout dirty, which blocks the next pull and is refused by
+  # scripts/deploy.sh.
   mattermost_target: ""        # "@user" for a DM, "#channel" for a channel
   ntfy_timeout_seconds: 10.0
   min_severity: "ok"           # ok | warn | critical
