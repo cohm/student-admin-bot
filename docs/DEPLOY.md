@@ -300,12 +300,27 @@ operation on this host goes through a container. On a host that does have
 The four commands above, unattended and with a verdict. Cron entry:
 
 ```cron
-# Weekly corpus refresh, Sunday 04:00. PATH is set explicitly: cron's default
-# is minimal, and `docker` not being found is the quiet way this never runs.
-PATH=/usr/local/bin:/usr/bin:/bin
+# Weekly corpus refresh, Sunday 04:00.
 0 4 * * 0 cd $HOME/student-admin-bot && scripts/maintain.sh \
     >> $HOME/bot-maintenance.log 2>&1
 ```
+
+Cron runs with a minimal environment, and `docker` not being found is the quiet
+way a cron job never runs. Rather than adding a defensive `PATH=` line and
+hoping, rehearse it — `env -i` strips the login environment, so this is what
+cron will actually see:
+
+```bash
+env -i HOME="$HOME" PATH=/usr/bin:/bin SHELL=/bin/sh \
+    sh -c 'cd $HOME/student-admin-bot && scripts/maintain.sh -n'
+```
+
+`-n` checks docker, disk and the lock, then prints the plan without touching
+anything. On this host it passes as-is, so no `PATH` line is needed; if it ever
+fails with "docker not found", add `PATH=/usr/local/bin:/usr/bin:/bin` as its
+own line above the schedule (crontab files accept `NAME=value` assignments,
+which apply to every job below them). Worth re-running after any deploy that
+adds a new command-line dependency to the script.
 
 Measured on prod, 2026-09-12 (`--skip-scrape`, nothing to re-embed):
 
