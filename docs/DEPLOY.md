@@ -361,13 +361,22 @@ Every configured channel gets every notification at or above `min_severity` —
 there is no primary and no fallback. Two are supported, and running both is the
 intended starting point: the comparison is what decides which one stays.
 
+```bash
+# .env on the prod VM — NOT config.yaml, see below
+NOTIFY_MATTERMOST_TARGET=@chohm     # or "#bot-ops"; empty disables
+```
+
 ```yaml
-# config.yaml
+# config.yaml — defaults that apply everywhere
 notify:
-  mattermost_target: "@chohm"   # or "#bot-ops"; empty disables
-  ntfy_server: "https://ntfy.sh"
   min_severity: "ok"            # ok | warn | critical
 ```
+
+**Per-host settings go in `.env`, not `config.yaml`.** Who gets notified, and
+which ntfy server is used, differ per host — and `config.yaml` is tracked, so
+editing it on the server makes the checkout dirty, which blocks the next
+`git pull --ff-only` and is refused outright by `scripts/deploy.sh`. That has
+already cost one deploy on this host (the SSO merge, 2026-09-09).
 
 **Mattermost** posts as the bot account. The credentials are already in `.env`,
 so there is no webhook URL to provision or rotate, and the report lands where

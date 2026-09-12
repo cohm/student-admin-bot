@@ -10,6 +10,7 @@ from __future__ import annotations
 import pytest
 
 from scripts.notify import resolve_channel_id
+from student_bot.config import get_config
 
 
 class FakeUsers:
@@ -106,3 +107,39 @@ def test_unknown_channel_names_the_channel_and_team():
         resolve_channel_id(FakeDriver(), "#nowhere", team="kth")
     assert "nowhere" in str(e.value)
     assert "kth" in str(e.value)
+
+
+# --- per-host configuration ---------------------------------------------
+#
+# Who to notify differs per host, so it must be settable without editing
+# config.yaml: a hand-edited tracked file in a production checkout makes it
+# dirty, which blocks `git pull --ff-only` and is refused by deploy.sh.
+
+
+def test_env_overrides_the_committed_mattermost_target(monkeypatch):
+    monkeypatch.setenv("NOTIFY_MATTERMOST_TARGET", "@chohm")
+    get_config.cache_clear()
+    try:
+        assert get_config().notify.mattermost_target == "@chohm"
+    finally:
+        get_config.cache_clear()
+
+
+def test_without_the_env_var_the_committed_value_stands(monkeypatch):
+    monkeypatch.delenv("NOTIFY_MATTERMOST_TARGET", raising=False)
+    get_config.cache_clear()
+    try:
+        assert get_config().notify.mattermost_target == ""
+    finally:
+        get_config.cache_clear()
+
+
+def test_env_overrides_the_ntfy_server(monkeypatch):
+    """Same reasoning, plus: this repository is public and the self-hosted
+    server's hostname is internal infrastructure."""
+    monkeypatch.setenv("NTFY_SERVER", "https://ntfy.internal.example")
+    get_config.cache_clear()
+    try:
+        assert get_config().notify.ntfy_server == "https://ntfy.internal.example"
+    finally:
+        get_config.cache_clear()
