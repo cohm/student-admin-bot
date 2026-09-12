@@ -286,3 +286,82 @@ entries:
       - "studentliv"
       - "mottagning"
 
+  # --- The rest of the programme descriptions (added 2026-09-12) ---
+  #
+  # CTFYS above proved the shape; these cover the remaining families. Each
+  # section index page IS server-rendered with body links (unlike
+  # /utbildning/hitta, which is an SPA), so one seed per family with
+  # follow_links reaches every programme without listing 76 URLs by hand.
+  #
+  # include_patterns require a SINGLE slug segment. That is what separates a
+  # programme page from /en/studies/master/admissions/... and from the
+  # `-1.NNNNN` article pages that share the prefix.
+
+  - url: https://www.kth.se/utbildning/civilingenjor
+    follow_links: true
+    max_depth: 1
+    include_patterns:
+      - "^/utbildning/civilingenjor/[a-z0-9-]+$"
+    exclude_patterns: []
+    type_hint: html
+    doc_title_override: ""
+    max_pages: 40
+    exclude_sections: *programme_page_exclusions
+
+  - url: https://www.kth.se/utbildning/hogskoleingenjor
+    follow_links: true
+    max_depth: 1
+    include_patterns:
+      - "^/utbildning/hogskoleingenjor/[a-z0-9-]+$"
+    exclude_patterns: []
+    type_hint: html
+    doc_title_override: ""
+    max_pages: 30
+    exclude_sections: *programme_page_exclusions
+
+  - url: https://www.kth.se/utbildning/kandidatutbildning
+    follow_links: true
+    max_depth: 1
+    include_patterns:
+      - "^/utbildning/kandidatutbildning/[a-z0-9-]+$"
+    exclude_patterns: []
+    type_hint: html
+    doc_title_override: ""
+    max_pages: 20
+    exclude_sections: *programme_page_exclusions
+
+  # Master programmes are published in ENGLISH ONLY — there is no Swedish
+  # equivalent of these pages. Until now the corpus was 100% Swedish, so this
+  # is the first English content in it; bge-m3 was chosen precisely because
+  # English queries must hit Swedish documents and vice versa.
+  #
+  # The English pages need their OWN exclusion list: the section names differ,
+  # and one of them ("Courses in the programme") is the English counterpart of
+  # the syllabus content that must only ever come from the study plans.
+  - url: https://www.kth.se/en/studies/master
+    follow_links: true
+    max_depth: 1
+    include_patterns:
+      - "^/en/studies/master/[a-z0-9-]+$"
+    exclude_patterns: []
+    type_hint: html
+    doc_title_override: ""
+    max_pages: 80
+    exclude_sections: &programme_page_exclusions_en
+      # Authoritative elsewhere — study plans own these.
+      - "courses in the programme"
+      - "admissions"
+      - "entry requirements"
+      # Time-sensitive; stale between scrapes.
+      - "application deadline"
+      - "next application round"
+      # Marketing and site-wide boilerplate that appears as h2 on every page.
+      - "meet students"
+      - "discover alumni"
+      - "next step"
+      - "subscribe"
+      - "explore our campuses"
+      - "explore kth"
+      - "why kth"
+      - "student life"
+      - "browse all programmes"

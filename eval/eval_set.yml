@@ -343,3 +343,22 @@
     - "ansvariga-for-grundutbildningen-pa-itm"   # www.kth.se, former home
   notes: "Control: ITM prints codes, so this worked before programme-code expansion too. Guards against a fix for the name-only schools breaking the schools that were fine."
 
+# ---------------- programme descriptions (added 2026-09-12) ----------------
+# The corpus gained the outward-facing programme pages. These lock in the
+# capability: "what IS this programme" used to return a contact page or
+# another programme's mapping table. The English case matters doubly — master
+# programmes are published in English only, and until this the corpus held no
+# English at all.
+
+- question: "What is the MSc in Engineering Physics about?"
+  lang: en
+  kind: in_domain
+  expected_doc_substring: "engineering-physics"
+  notes: "Master descriptions exist only in English. Also the first English content in the corpus, so this doubles as a check that cross-lingual retrieval still behaves."
+
+- question: "Berätta mer om civilingenjörsprogrammet i datateknik"
+  lang: sv
+  kind: in_domain
+  expected_doc_substring: "datateknik"
+  notes: "Swedish counterpart. Before the programme pages this returned the school contact page."
+
