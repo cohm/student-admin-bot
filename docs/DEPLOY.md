@@ -300,10 +300,26 @@ operation on this host goes through a container. On a host that does have
 The four commands above, unattended and with a verdict. Cron entry:
 
 ```cron
-# Weekly corpus refresh, Sunday 04:00.
+# Weekly corpus refresh, Sunday 04:00. PATH is set explicitly: cron's default
+# is minimal, and `docker` not being found is the quiet way this never runs.
+PATH=/usr/local/bin:/usr/bin:/bin
 0 4 * * 0 cd $HOME/student-admin-bot && scripts/maintain.sh \
     >> $HOME/bot-maintenance.log 2>&1
 ```
+
+Measured on prod, 2026-09-12 (`--skip-scrape`, nothing to re-embed):
+
+| phase | duration |
+|---|---:|
+| eval (baseline) | 1 m 48 s |
+| snapshot | 1 s |
+| reindex (0 chunks changed) | 3 m 22 s |
+| eval (after) | 1 m 45 s |
+| **total** | **~7 m** |
+
+A real weekly run adds the scrape (~1 min) and a handful of changed chunks, so
+expect **8–9 min**. Note the reindex floor: 3 m 22 s with *nothing* to embed,
+because parsing all 187 corpus files is not incremental — only embedding is.
 
 **Why 04:00 and not the 02:17–03:00 gap.** Squeezing the run between the
 nightly backup and the host snapshot would make the schedule load-bearing:
@@ -324,7 +340,11 @@ Order of operations, and why:
 4. **reindex**, in place.
 5. **eval (after)**, into a second JSON.
 6. **restart** `web mattermost` — see the corpus-refresh section above; without
-   this the reindex is invisible to the running services.
+   this the reindex is invisible to the running services — then poll
+   `BOT_HEALTH_URL` until it answers. `docker compose restart` returns when the
+   containers are up, not when the app is serving; `web` loads bge-m3 and the
+   cross-encoder on startup. Without the poll the job could report green while
+   the service never came back, at 04:00, with nobody to notice until morning.
 7. **compare and report** via `scripts/eval_compare.py`, sent by
    `student-bot-notify` to every configured channel.
 
