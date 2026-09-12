@@ -47,7 +47,7 @@
 #
 # CONFIGURATION (all optional; override via environment)
 #   BOT_BRANCH        Branch to deploy. Default: main
-#   BOT_SERVICES      Compose services to restart. Default: "beta-web bot"
+#   BOT_SERVICES      Compose services to restart. Default: "web mattermost"
 #   BOT_HEALTH_URL    Polled after restart. Default:
 #                     http://127.0.0.1:8000/api/health
 #                     Authenticated by design — 401/403 counts as healthy (it
@@ -93,7 +93,7 @@ fi
 set -euo pipefail
 
 BRANCH="${BOT_BRANCH:-main}"
-SERVICES="${BOT_SERVICES:-beta-web bot}"
+SERVICES="${BOT_SERVICES:-web mattermost}"
 HEALTH_URL="${BOT_HEALTH_URL:-http://127.0.0.1:8000/api/health}"
 HEALTH_WAIT="${BOT_HEALTH_WAIT:-120}"
 BACKUP_DIR="${BOT_BACKUP_DIR:-$HOME/bot-deploy-backups}"
@@ -383,9 +383,9 @@ build_and_restart() {
     *)
       printf '\n'
       docker compose ps || true
-      docker compose logs --tail=40 beta-web || true
+      docker compose logs --tail=40 web || true
       die "web service did not answer at $HEALTH_URL after ${HEALTH_WAIT}s (last: $code).
-        Inspect:   docker compose logs -f beta-web
+        Inspect:   docker compose logs -f web
         Roll back: scripts/deploy.sh --rollback <previous-sha>"
       ;;
   esac
@@ -624,14 +624,14 @@ if sso_enabled; then
   if [[ ! -s data/web_users ]]; then
     die "KTH_OIDC_ENABLED is true but data/web_users is missing or empty.
         Every KTH account would authenticate and then get a 403.
-        Add users first: docker compose run --rm beta-web student-bot-mkuser <kthid>"
+        Add users first: docker compose run --rm web student-bot-mkuser <kthid>"
   fi
   info "SSO enabled; data/web_users has $(grep -cvE '^\s*(#|$)' data/web_users) entr(y|ies)"
 fi
 
 if [[ -n "$(changed_paths "$BEFORE" "$AFTER" "${INGEST_PATHS[@]}")" ]]; then
   warn "ingest code changed — the existing index was built by the old code."
-  warn "consider: docker compose run --rm beta-web python -m scripts.reindex"
+  warn "consider: docker compose run --rm web python -m scripts.reindex"
 fi
 
 if [[ -n "$(changed_paths "$BEFORE" "$AFTER" "${EVAL_PATHS[@]}")" ]]; then

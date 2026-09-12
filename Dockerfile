@@ -64,7 +64,7 @@ ENV STUDENT_BOT_VERSION=${STUDENT_BOT_VERSION}
 # both services. To warm it deliberately (e.g. before first start on a new
 # host) rather than paying the download on a student's first question:
 #
-#     docker compose run --rm beta-web python -c "\
+#     docker compose run --rm web python -c "\
 #     from sentence_transformers import SentenceTransformer, CrossEncoder; \
 #     SentenceTransformer('BAAI/bge-m3', device='cpu'); \
 #     CrossEncoder('cross-encoder/mmarco-mMiniLMv2-L12-H384-v1', device='cpu')"
@@ -74,5 +74,5 @@ ENV TRANSFORMERS_OFFLINE=0 \
     HF_HUB_DISABLE_TELEMETRY=1 \
     HF_HOME=/app/.hf_cache
 
-# Default: run the Mattermost bot. Override with `docker compose run --rm bot python -m scripts.reindex` etc.
+# Default: run the Mattermost bot. Override with `docker compose run --rm mattermost python -m scripts.reindex` etc.
 CMD ["python", "-m", "student_bot.bot.mattermost_client"]

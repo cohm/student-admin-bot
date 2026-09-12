@@ -34,8 +34,8 @@ def main() -> None:
     config_path = root / "config.yaml"
     perf_on = _performance_panel_enabled(config_path)
 
-    click.echo("Stopping beta-web and bot...")
-    subprocess.run(["docker", "compose", "stop", "beta-web", "bot"], cwd=root, check=True)
+    click.echo("Stopping web and mattermost...")
+    subprocess.run(["docker", "compose", "stop", "web", "mattermost"], cwd=root, check=True)
 
     if perf_on:
         click.echo("If host metrics collector is still running, stop it with:")
