@@ -122,7 +122,7 @@ def retrieve(
 
     rerank_t0 = time.monotonic()
     pairs = [(query, c.text) for c in candidates]
-    scores = get_reranker(cfg).predict(pairs).tolist()
+    scores = get_reranker(cfg).predict(pairs, batch_size=cfg.reranker.batch_size).tolist()
     rerank_ms = int((time.monotonic() - rerank_t0) * 1000)
     for c, s in zip(candidates, scores):
         c.rerank_score = float(s)
