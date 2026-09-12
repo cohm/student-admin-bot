@@ -314,6 +314,21 @@ take_backup() {
 # ---------------------------------------------------------------------------
 build_and_restart() {
   check_free_space
+
+  # Stamp the image with what it was built from. `.git/` is not copied into
+  # the image, so at runtime `student_bot.version` cannot detect anything and
+  # falls back to this env var, baked in via the Dockerfile ARG. Without it
+  # every deployed image reports no version at all and the About page simply
+  # omits it — which is how it has been until now.
+  #
+  # Prefer an exact tag over the short sha, matching get_version()'s own
+  # precedence, so a tagged release links to /releases/tag/... rather than to
+  # a bare commit.
+  STUDENT_BOT_VERSION="$(git describe --tags --exact-match HEAD 2>/dev/null \
+    || git rev-parse --short HEAD)"
+  export STUDENT_BOT_VERSION
+  info "stamping image with version: $STUDENT_BOT_VERSION"
+
   # Build first, while the old stack still serves: this is the slow step and
   # it needs no downtime. Only then stop, snapshot, and bring the new one up.
   step "Building image"
