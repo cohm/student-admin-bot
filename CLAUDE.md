@@ -13,10 +13,11 @@ Entry-point names come from `pyproject.toml` `[project.scripts]`; the `student-b
 - `uv run student-bot-web` — FastAPI web UI (binds 127.0.0.1 by default).
 - `uv run student-bot` — Mattermost websocket bot.
 - `uv run python -m scripts.reindex` — rebuild Chroma index from `docs/corpus/`. Incremental by content hash.
-- `uv run python -m eval.run_eval` (`--show-failures`) — recall@5 + gate accuracy. Does **not** call the LLM.
+- `uv run python -m eval.run_eval` (`--show-failures`, `--json-out FILE`) — recall@5 + gate accuracy. Does **not** call the LLM. `--json-out` writes the same numbers machine-readably, which is what `scripts/eval_compare.py` diffs between two runs.
 - `uv run student-bot-stats [--since 7d]` — per-topic counts, latency, 👍/👎 ratios.
 - `uv run student-bot-mkuser <name>` — create a web auth user (scrypt).
 - `uv run student-bot-backup [--only chroma] [--keep N] [--verify FILE]` — snapshot `data/` (Chroma + SQLite, online-backup API, sha256 MANIFEST) into `data/backups/`. **`--only chroma` is the shareable subset**; a full archive contains `qa_log` student text. `--keep N` prunes older archives per component-set — used by the nightly cron on prod (see `docs/DEPLOY.md`).
+- `scripts/maintain.sh` — **weekly unattended corpus refresh** (run on the VM): eval → snapshot → scrape → reindex → eval → restart → report to Mattermost. Exits 3 if recall@5 fell, 2 on warnings, 0 green. `-n` dry-runs; `--no-notify` prints instead of posting. See `docs/DEPLOY.md`.
 - `scripts/deploy.sh` — **production deploy** (run on the VM, not locally): ff-only pull → `docker compose build` → snapshot `data/` → restart → health check. `--status` is read-only; `-n` dry-runs; `--rollback <sha>` redeploys an earlier commit. Refuses a dirty checkout, and refuses a **chromadb major** change without `--allow-chroma-migration` (that migrates `data/chroma` in place, irreversibly). `--help` explains each guard.
 - `uv run student-bot-jargon list|proposals|accept|reject|add|remove` — manage `dictionary.json`.
 - `uv run ruff check .` / `uv run ruff format .` — line-length 100, target py311.
@@ -48,7 +49,8 @@ The README's ASCII diagram and per-file role table are the fastest way in for co
 - **The LLM has no agentic tools — that's the prompt-injection security boundary.** No shell, no MCP, no web fetch, no file write. Don't add any.
 - **Logging is opt-out, not opt-in.** User IDs are salted SHA-256 (salt from `USER_ID_HASH_SALT`). Opted-out traffic still bumps `anon_counter` (lang + gate-pass only). One-shot disclosure tracked in `disclosed`. Surfaces: Mattermost `!privacy off/on/status`, web onboarding checkbox.
 - **Citations link via `web.doc_base_url`** (default `/docs`); PDFs use `#page=N`. Changes to `paths.docs_dir` must keep the web static mount in sync.
-- **Reindex is manual.** `scripts/reindex.py` is incremental (by `<rel_source>#<idx>` content hash) but never auto-runs.
+- **Reindex is manual** in the sense that nothing in the *app* triggers it: `scripts/reindex.py` is incremental (by `<rel_source>#<idx>` content hash) and never auto-runs. `scripts/maintain.sh` on prod is the one scheduled caller.
+- **A reindex is invisible to already-running services until they restart.** Chroma reads a collection's HNSW segment into memory on the first query in a process and never reloads it, so `web`/`mattermost` keep serving the pre-reindex vectors. `count()` still rises (that reads SQLite) and an eval in a fresh container reports the new index as green — so nothing looks wrong. Always `docker compose restart web mattermost` after reindexing; `tests/test_chroma_reload.py` pins the behaviour.
 - **`dictionary.json` hot-reloads on mtime change** — no restart needed after edits or `student-bot-jargon accept`. `dictionary_proposals.json` is gitignored (in-flight student suggestions stay private).
 - **`topics.yaml` edits affect only new classifications.** Old `qa_log` rows keep their previous label until reclassified.
 - **Docker corpus mount:** if host `docs/corpus` is a symlink pointing outside `docs/`, set `CORPUS_HOST_PATH` to the symlink's absolute target — symlinks usually don't resolve inside the container.

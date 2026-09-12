@@ -197,6 +197,12 @@ class MattermostConfig(BaseModel):
     # rate-limit, and other paths without sources. Default off until the
     # rendering has been eyeballed in the target MM instance.
     use_attachments: bool = False
+    # Where unattended jobs (the weekly maintenance run) report to, via
+    # `student-bot-notify`. "@username" is a DM, "#channel-name" a channel.
+    # Empty means no default target, and the notifier refuses rather than
+    # guessing — a maintenance alert posted into the wrong channel is worse
+    # than one that loudly fails to send.
+    notify_target: str = ""
 
 
 class LoggingConfig(BaseModel):

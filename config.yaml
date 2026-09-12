@@ -238,6 +238,9 @@ mattermost:
   # Render answers as Slack-style message attachments (colored sidebar +
   # Sources fields). Off by default; enable after eyeballing in your MM.
   use_attachments: false
+  # Where unattended jobs report (weekly maintenance). "@user" DMs, "#chan"
+  # posts to a channel. Empty = no default, and student-bot-notify refuses.
+  notify_target: ""
 
 logging:
   retain_days: 90

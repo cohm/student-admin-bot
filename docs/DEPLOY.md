@@ -259,7 +259,23 @@ cd ~/student-admin-bot
 docker compose run --rm scrape                          # scrape -> docs/corpus
 docker compose run --rm web python -m scripts.reindex   # corpus -> data/chroma
 docker compose run --rm web python -m eval.run_eval     # confirm nothing broke
+docker compose restart web mattermost                   # REQUIRED — see below
 ```
+
+Or let `scripts/maintain.sh` do all four with a before/after comparison — see
+[Weekly corpus maintenance](#weekly-corpus-maintenance-scriptsmaintainsh).
+
+**The restart is not optional.** A reindex run by another process is invisible
+to the services already running. Chroma loads a collection's HNSW segment into
+memory the first time that process queries it and never reloads it, so `web`
+and `mattermost` keep answering from the index they had at startup. The trap is
+that nothing looks wrong: `count()` reads SQLite and does climb to the new
+number, and an eval — a fresh container every time — reports the *new* index
+and comes back green while students are still being served the old one.
+Opening a new Chroma client inside the same process does not help either;
+chromadb caches the System per persist directory. Verified against chromadb
+1.5.9; `tests/test_chroma_reload.py` pins the behaviour so a future version
+that fixes it shows up as a failing test rather than as folklore.
 
 **Why a separate `scrape` service.** `web` and `mattermost` mount the corpus
 `:ro`, because a running app must never modify its own knowledge base. The
@@ -272,12 +288,80 @@ it.
 KTH restructures a page: on 2026-09-12 the ITM programansvariga list moved to
 intra.kth.se and that page dropped from 35 chunks to 5, which would have
 quietly broken every "who is PA for ..." question. Recall@5 caught it. Expect
-`43/43`; if it is lower, run with `--show-failures` and look at what moved
-before doing anything else.
+`44/45` as of v0.1.1; if it is lower, run with `--show-failures` and look at
+what moved before doing anything else.
 
 Files written this way are root-owned, which is fine here because every corpus
 operation on this host goes through a container. On a host that does have
 `uv`, prefer `uv run student-bot-fetch-url-corpus` so ownership stays sane.
+
+## Weekly corpus maintenance: `scripts/maintain.sh`
+
+The four commands above, unattended and with a verdict. Cron entry:
+
+```cron
+# Weekly corpus refresh, Sunday 02:30. After the 02:17 backup; the reindex
+# itself does not start until the baseline eval finishes, ~2 min in.
+30 2 * * 0 cd $HOME/student-admin-bot && scripts/maintain.sh \
+    >> $HOME/bot-maintenance.log 2>&1
+```
+
+Order of operations, and why:
+
+1. **eval (baseline)** — `--json-out`, so the comparison is machine-readable.
+2. **snapshot** `student-bot-backup --only chroma --keep 4`. Rotation counts
+   per component set, so these never age out the nightly full archives.
+3. **scrape** in the `scrape` service (the corpus is `:ro` everywhere else).
+4. **reindex**, in place.
+5. **eval (after)**, into a second JSON.
+6. **restart** `web mattermost` — see the corpus-refresh section above; without
+   this the reindex is invisible to the running services.
+7. **compare and report** via `scripts/eval_compare.py`, posted to Mattermost
+   by `student-bot-notify`.
+
+**Why the eval runs twice.** Running it only afterwards tells you the index got
+worse, not what made it worse. With a baseline taken minutes earlier, the
+corpus is the only thing that changed in between, so a drop is attributable to
+the scrape rather than to whatever was merged that week.
+
+**Why it reports instead of rolling back.** `scripts/reindex.py` rebuilds
+`data/chroma` in place, so by the time the second eval runs the new index is
+already on disk. Staging it elsewhere and promoting only on green is the
+stricter design, but it doubles the index on a 30 GB VM that has already
+filled once — and the failure it guards against is recoverable in seconds from
+the step-2 snapshot. So the job never decides to roll back on its own; it puts
+the exact restore command in the report.
+
+Exit codes, which are also the notification's headline:
+
+| code | meaning |
+|---|---|
+| 0 | green |
+| 2 | warnings — churn, a swapped recall failure, a gate wobble |
+| 3 | recall@5 fell: the index lost something it used to find |
+| 1 | the run itself failed (scrape, reindex, docker, lock held) |
+
+Only recall@5 is critical. Gate pass-rate and OOD refuse-rate move with
+cross-encoder scores, which are unbounded and drift slightly with any corpus
+change; treating every wobble as critical trains you to ignore the alert.
+Recall is a statement about whether the right document is reachable at all.
+
+Set the notification target once, in `config.yaml`:
+
+```yaml
+mattermost:
+  notify_target: "@chohm"    # or "#bot-ops"
+```
+
+`student-bot-notify` posts as the bot account — the credentials are already in
+`.env`, so there is no webhook URL to provision or rotate. It is a separate
+entry point from the bot on purpose: the job has to be able to report that the
+bot is broken.
+
+Useful flags: `-n` (guards and plan, no side effects), `--no-notify` (run for
+real, print the report instead of posting), `--skip-scrape` (reindex from the
+corpus already on disk). A lock under `data/maintenance/` stops two runs from
+rewriting `data/chroma` at once.
 
 ## Backups, and handing a snapshot to a collaborator
 
@@ -329,10 +413,10 @@ Notes:
 
 - The SQLite files are copied through SQLite's online backup API, so the stack
   keeps running. The Chroma HNSW `.bin` files are plain files, so **this must
-  not overlap a reindex** — once a weekly reindex job exists, put it on a
-  different night. The window here is genuinely narrow: the backup starts at
-  02:17 and the host snapshot starts at 03:00, so a long reindex has nowhere
-  to sit between them.
+  not overlap a reindex**. The backup is nightly and takes seconds for ~10 MB,
+  so the weekly maintenance run is scheduled at 02:30 — after the 02:17 backup
+  has finished, and its reindex does not start until the baseline eval is done
+  about two minutes in.
 - The container runs as root, so archives are root-owned on the host. Reading
   and `scp` are fine; removing one by hand needs `sudo`.
 - Full archives contain `qa_log` student text and must stay on this host. The
