@@ -238,9 +238,16 @@ mattermost:
   # Render answers as Slack-style message attachments (colored sidebar +
   # Sources fields). Off by default; enable after eyeballing in your MM.
   use_attachments: false
-  # Where unattended jobs report (weekly maintenance). "@user" DMs, "#chan"
-  # posts to a channel. Empty = no default, and student-bot-notify refuses.
-  notify_target: ""
+
+# Where unattended jobs (scripts/maintain.sh) report. Every configured channel
+# gets every notification at or above min_severity — no primary/fallback.
+notify:
+  mattermost_target: ""        # "@user" for a DM, "#channel" for a channel
+  ntfy_server: "https://ntfy.sh"
+  ntfy_timeout_seconds: 10.0
+  min_severity: "ok"           # ok | warn | critical
+  # The ntfy TOPIC is a shared secret (on a public server, knowing it is enough
+  # to publish), so it comes from NTFY_TOPIC in .env — not from this file.
 
 logging:
   retain_days: 90

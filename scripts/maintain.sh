@@ -51,11 +51,13 @@
 # CONFIGURATION (all optional; override via environment)
 #   BOT_MAINT_DIR        Reports and logs. Default: <repo>/data/maintenance
 #   BOT_MAINT_KEEP       Chroma snapshots to retain. Default: 4 (a month)
-#   BOT_MAINT_NOTIFY     '@user' / '#channel'. Default: mattermost.notify_target
-#   BOT_MAINT_DEADLINE   HH:MM the run should be done by. Default: 03:00 — the
-#                        host snapshots this VM then, and a snapshot taken
-#                        mid-reindex contains a torn Chroma segment. Advisory:
-#                        reported, never enforced mid-run.
+#   BOT_MAINT_NOTIFY     '@user' / '#channel' for Mattermost. Default:
+#                        notify.mattermost_target in config.yaml. ntfy, if
+#                        NTFY_TOPIC is set, always fires alongside it.
+#   BOT_MAINT_MAX_MINUTES  Report the run as slow above this. Default: 45.
+#                        Steady state is ~9 min and the worst catch-up run
+#                        measured was 21 min, so 45 means "stuck", not "busy".
+#                        Advisory: reported, never enforced mid-run.
 #   BOT_MAINT_MIN_FREE_GB  Refuse to start below this. Default: 4
 #   BOT_MAINT_MAX_CHURN  Chunk delta worth mentioning when green. Default: 150
 #   BOT_SERVICES         Services to restart. Default: "web mattermost"
@@ -66,10 +68,12 @@
 #   scripts/maintain.sh -n           # dry run: guards + plan, no side effects
 #   scripts/maintain.sh --no-notify  # run for real, print instead of posting
 #
-#   Cron (Sunday 02:30 — after the 02:17 backup, and the reindex itself does
-#   not start until the baseline eval is done ~2 min in):
+#   Cron (Sunday 04:00). Deliberately AFTER the host finishes snapshotting this
+#   VM at 03:00, not squeezed into the 02:17-03:00 gap: nothing downstream is
+#   waiting, so an occasional long catch-up run costs nothing and no schedule
+#   arithmetic has to hold for the job to be safe.
 #
-#     30 2 * * 0 cd $HOME/student-admin-bot && scripts/maintain.sh \
+#     0 4 * * 0 cd $HOME/student-admin-bot && scripts/maintain.sh \
 #         >> $HOME/bot-maintenance.log 2>&1
 #
 # See docs/DEPLOY.md for the surrounding host operations.
@@ -86,7 +90,7 @@ cd "$REPO_ROOT"
 
 MAINT_DIR="${BOT_MAINT_DIR:-$REPO_ROOT/data/maintenance}"
 KEEP="${BOT_MAINT_KEEP:-4}"
-DEADLINE="${BOT_MAINT_DEADLINE:-03:00}"
+MAX_MINUTES="${BOT_MAINT_MAX_MINUTES:-45}"
 MIN_FREE_GB="${BOT_MAINT_MIN_FREE_GB:-4}"
 MAX_CHURN="${BOT_MAINT_MAX_CHURN:-150}"
 SERVICES="${BOT_SERVICES:-web mattermost}"
@@ -167,8 +171,11 @@ c_after="$c_maint/$(basename "$AFTER_JSON")"
 
 dc() { docker compose "$@"; }
 
+# notify <body> <severity>. Severity drives ntfy's priority (and whether a
+# channel fires at all), so it must reflect the verdict, not the fact that a
+# message exists.
 notify() {
-  local body="$1" target_args=()
+  local body="$1" severity="${2:-ok}" target_args=()
   [[ -n "$NOTIFY_TARGET" ]] && target_args=(--to "$NOTIFY_TARGET")
   if [[ $DO_NOTIFY -eq 0 ]]; then
     info "notification suppressed (--no-notify); report follows"
@@ -183,7 +190,8 @@ notify() {
   # Never let a notification failure mask the result of the run itself: the
   # report is already on disk and in this log either way.
   if ! printf '%s' "$body" \
-      | dc run --rm -T web student-bot-notify ${target_args[@]+"${target_args[@]}"}; then
+      | dc run --rm -T web student-bot-notify --severity "$severity" \
+          ${target_args[@]+"${target_args[@]}"}; then
     warn "could not post the report to Mattermost; it is at $REPORT"
   fi
 }
@@ -199,7 +207,7 @@ notify_failure() {
 \`\`\`
 $1
 \`\`\`
-Full log: \`$HOME/bot-maintenance.log\`" || true
+Full log: \`$HOME/bot-maintenance.log\`" critical || true
 }
 
 # ---------------------------------------------------------------------------
@@ -336,18 +344,16 @@ TIMINGS="| phase | duration |
 | eval (after) | $(fmt $EVAL_AFTER_S) |
 | **total** | **$(fmt $TOTAL_S)** |"
 
-# Only meaningful when the run actually started before the deadline, i.e. this
-# is the scheduled night run. A hand-run at 14:00 is "past 03:00" too, and a
-# warning that fires on every manual run is one nobody reads at 03:00.
+# Duration, not wall-clock: the job runs at 04:00, after the host snapshot, so
+# finishing late is no longer a safety problem — but a run that takes several
+# times as long as usual still means something is wrong (a scrape retrying, a
+# corpus that grew by hundreds of files, a starved VM).
 DEADLINE_NOTE=""
-started_hm="$(date -d "@$STARTED_EPOCH" '+%H:%M' 2>/dev/null \
-  || date -r "$STARTED_EPOCH" '+%H:%M' 2>/dev/null || echo "$DEADLINE")"
-finished_hm="$(date '+%H:%M')"
-if [[ "$started_hm" < "$DEADLINE" && "$finished_hm" > "$DEADLINE" ]]; then
+if (( TOTAL_S > MAX_MINUTES * 60 )); then
   DEADLINE_NOTE="
-⏰ Finished at $finished_hm, past the $DEADLINE deadline — the host VM snapshot
-may have overlapped the reindex. Check that snapshot before relying on it."
-  warn "run finished at $finished_hm, past $DEADLINE"
+⏰ Took $(fmt $TOTAL_S), over the ${MAX_MINUTES} min expected. Steady state is
+~9 min; check the scrape and reindex timings above."
+  warn "run took $(fmt $TOTAL_S), over ${MAX_MINUTES} min"
 fi
 
 {
@@ -363,7 +369,12 @@ fi
 } > "$REPORT"
 
 info "report -> $REPORT"
-notify "$(cat "$REPORT")"
+case "$VERDICT" in
+  0) SEVERITY=ok ;;
+  3) SEVERITY=critical ;;
+  *) SEVERITY=warn ;;
+esac
+notify "$(cat "$REPORT")" "$SEVERITY"
 
 printf '\n[maintain] done in %s (verdict: %s)\n' "$(fmt $TOTAL_S)" "$VERDICT"
 exit "$VERDICT"

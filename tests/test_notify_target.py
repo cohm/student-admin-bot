@@ -84,7 +84,7 @@ def test_surrounding_whitespace_is_tolerated():
 def test_empty_target_names_the_config_key_to_set():
     with pytest.raises(SystemExit) as e:
         resolve_channel_id(FakeDriver(), "", team="kth")
-    assert "notify_target" in str(e.value)
+    assert "notify.mattermost_target" in str(e.value)
 
 
 def test_channel_without_a_team_explains_both_ways_out():

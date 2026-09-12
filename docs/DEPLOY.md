@@ -300,11 +300,20 @@ operation on this host goes through a container. On a host that does have
 The four commands above, unattended and with a verdict. Cron entry:
 
 ```cron
-# Weekly corpus refresh, Sunday 02:30. After the 02:17 backup; the reindex
-# itself does not start until the baseline eval finishes, ~2 min in.
-30 2 * * 0 cd $HOME/student-admin-bot && scripts/maintain.sh \
+# Weekly corpus refresh, Sunday 04:00.
+0 4 * * 0 cd $HOME/student-admin-bot && scripts/maintain.sh \
     >> $HOME/bot-maintenance.log 2>&1
 ```
+
+**Why 04:00 and not the 02:17–03:00 gap.** Squeezing the run between the
+nightly backup and the host snapshot would make the schedule load-bearing:
+correct only as long as every run stays under ~40 minutes, which a catch-up
+after a month of corpus drift does not (21 m 31 s is already on record for a
+single large import). Starting after the host snapshot removes the constraint
+entirely — nothing downstream is waiting, so a long run costs nothing. What is
+left is a *duration* check: `BOT_MAINT_MAX_MINUTES` (default 45) puts a note in
+the report when a run takes several times the ~9 minute steady state, which
+means something is stuck rather than merely busy.
 
 Order of operations, and why:
 
@@ -316,8 +325,8 @@ Order of operations, and why:
 5. **eval (after)**, into a second JSON.
 6. **restart** `web mattermost` — see the corpus-refresh section above; without
    this the reindex is invisible to the running services.
-7. **compare and report** via `scripts/eval_compare.py`, posted to Mattermost
-   by `student-bot-notify`.
+7. **compare and report** via `scripts/eval_compare.py`, sent by
+   `student-bot-notify` to every configured channel.
 
 **Why the eval runs twice.** Running it only afterwards tells you the index got
 worse, not what made it worse. With a baseline taken minutes earlier, the
@@ -346,17 +355,67 @@ cross-encoder scores, which are unbounded and drift slightly with any corpus
 change; treating every wobble as critical trains you to ignore the alert.
 Recall is a statement about whether the right document is reachable at all.
 
-Set the notification target once, in `config.yaml`:
+### Notification channels
+
+Every configured channel gets every notification at or above `min_severity` —
+there is no primary and no fallback. Two are supported, and running both is the
+intended starting point: the comparison is what decides which one stays.
 
 ```yaml
-mattermost:
-  notify_target: "@chohm"    # or "#bot-ops"
+# config.yaml
+notify:
+  mattermost_target: "@chohm"   # or "#bot-ops"; empty disables
+  ntfy_server: "https://ntfy.sh"
+  min_severity: "ok"            # ok | warn | critical
 ```
 
-`student-bot-notify` posts as the bot account — the credentials are already in
-`.env`, so there is no webhook URL to provision or rotate. It is a separate
-entry point from the bot on purpose: the job has to be able to report that the
-bot is broken.
+**Mattermost** posts as the bot account. The credentials are already in `.env`,
+so there is no webhook URL to provision or rotate, and the report lands where
+the bot's other conversations are. `student-bot-notify` is a separate entry
+point from the bot on purpose: the job has to be able to report that the bot is
+broken.
+
+**ntfy** is what actually reaches a phone at 04:00, when a Mattermost DM would
+sit unread until morning. Install the ntfy app, subscribe to the topic, done —
+no account needed. Severity maps to ntfy's priority, so a recall drop rings
+through a silenced phone (`5`) while a green week stays below default (`2`):
+
+| verdict | priority | tag |
+|---|---:|---|
+| green | 2 | ✅ |
+| warnings | 4 | ⚠️ |
+| recall dropped / run failed | 5 | 🚨 |
+
+The topic is **not** in `config.yaml`. On a public server anyone who knows the
+topic can both read and publish to it, which makes it a password, and
+`config.yaml` is committed. Put it in `.env`:
+
+```bash
+# .env  — treat like a password
+NTFY_TOPIC=$(openssl rand -hex 12)
+NTFY_TOKEN=                      # only for a protected/self-hosted server
+```
+
+Then subscribe to the same topic in the app (or
+`curl -s https://ntfy.sh/<topic>/json` to watch from a terminal). Empty
+`NTFY_TOPIC` disables the channel.
+
+**What may be sent this way.** The report is built from `eval/eval_set.yml`
+(checked into the repo) plus chunk counts — no `qa_log` text — which is what
+makes a third-party push service acceptable here. If a future report starts
+quoting real student questions, ntfy has to move to a self-hosted server or go.
+
+Check the wiring without sending anything real:
+
+```bash
+docker compose run --rm web student-bot-notify -n --severity critical \
+    --message 'test'
+```
+
+`min_severity` starts at `ok` so both channels see identical traffic while you
+compare them. Once that is settled, a weekly all-green push is the kind of
+notification people learn to swipe away — `warn` is the likely resting place
+for ntfy. An explicit `--to` always sends regardless of the floor.
 
 Useful flags: `-n` (guards and plan, no side effects), `--no-notify` (run for
 real, print the report instead of posting), `--skip-scrape` (reindex from the
@@ -413,10 +472,9 @@ Notes:
 
 - The SQLite files are copied through SQLite's online backup API, so the stack
   keeps running. The Chroma HNSW `.bin` files are plain files, so **this must
-  not overlap a reindex**. The backup is nightly and takes seconds for ~10 MB,
-  so the weekly maintenance run is scheduled at 02:30 — after the 02:17 backup
-  has finished, and its reindex does not start until the baseline eval is done
-  about two minutes in.
+  not overlap a reindex**. The weekly maintenance run is scheduled at 04:00,
+  well clear of both this backup and the 03:00 host snapshot, so no schedule
+  arithmetic has to hold for either to be safe.
 - The container runs as root, so archives are root-owned on the host. Reading
   and `scp` are fine; removing one by hand needs `sudo`.
 - Full archives contain `qa_log` student text and must stay on this host. The
