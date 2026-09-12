@@ -72,6 +72,7 @@
 #   scripts/deploy.sh -n                   # dry run: show what would happen
 #   scripts/deploy.sh --rebuild            # rebuild + restart at current HEAD
 #   scripts/deploy.sh --allow-chroma-migration
+#   scripts/deploy.sh --release v0.4.0     # deploy a tagged release
 #   scripts/deploy.sh --rollback <sha>     # redeploy an earlier commit
 #
 #   Upgrading the script itself: pull first, then run the new copy —
@@ -104,6 +105,7 @@ FORCE_REBUILD=0
 SKIP_BACKUP=0
 ALLOW_CHROMA_MIGRATION=0
 ROLLBACK_SHA=""
+RELEASE_TAG=""
 
 # Paths whose contents end up in the image or change runtime behaviour.
 # An allow-list, so a NEW top-level source directory would be missed until
@@ -144,6 +146,9 @@ while [[ $# -gt 0 ]]; do
     --rebuild)                  FORCE_REBUILD=1; shift ;;
     --skip-backup)              SKIP_BACKUP=1; shift ;;
     --allow-chroma-migration)   ALLOW_CHROMA_MIGRATION=1; shift ;;
+    --release)                  RELEASE_TAG="${2:-}"
+                                [[ -n "$RELEASE_TAG" ]] || die "--release needs a tag"
+                                shift 2 ;;
     --rollback)                 ROLLBACK_SHA="${2:-}"
                                 [[ -n "$ROLLBACK_SHA" ]] || die "--rollback needs a commit SHA"
                                 shift 2 ;;
@@ -201,6 +206,13 @@ chroma_version_at() {
     /^name = "chromadb"$/ { want = 1; next }
     want && /^version = / { gsub(/[",]/, "", $3); print $3; exit }
   '
+}
+
+# What HEAD is, named the way the About page will name it: an exact tag if
+# there is one, otherwise the short sha. Mirrors student_bot.version so the
+# script and the running app never disagree about what is deployed.
+describe_head() {
+  git describe --tags --exact-match HEAD 2>/dev/null || git rev-parse --short HEAD
 }
 
 built_sha()        { [[ -f "$STATE_FILE" ]] && cat "$STATE_FILE" 2>/dev/null || return 1; }
@@ -396,7 +408,13 @@ build_and_restart() {
 # ---------------------------------------------------------------------------
 if [[ $STATUS_ONLY -eq 1 ]]; then
   step "Status"
-  info "branch:      $(git rev-parse --abbrev-ref HEAD)"
+  _branch="$(git rev-parse --abbrev-ref HEAD)"
+  if [[ "$_branch" == "HEAD" ]]; then
+    info "branch:      (detached — deployed from a tag or a rollback)"
+  else
+    info "branch:      $_branch"
+  fi
+  info "version:     $(describe_head)"
   info "HEAD:        $(git rev-parse --short HEAD)  $(git log -1 --format=%s | cut -c1-48)"
   if bs="$(built_sha)"; then
     if [[ "$bs" == "$(git rev-parse HEAD)" ]]; then
@@ -445,6 +463,31 @@ if [[ $FORCE_REBUILD -eq 1 ]]; then
 fi
 
 # ---------------------------------------------------------------------------
+# Release path — deploy a tag rather than the branch head
+# ---------------------------------------------------------------------------
+if [[ -n "$RELEASE_TAG" ]]; then
+  step "Deploying release $RELEASE_TAG"
+  info "fetching tags"
+  git fetch --quiet --tags origin || warn "could not fetch tags; using whatever is local"
+  git rev-parse --verify --quiet "refs/tags/$RELEASE_TAG" >/dev/null \
+    || die "no such tag: $RELEASE_TAG
+        Available:  git tag --list --sort=-version:refname | head"
+  info "$RELEASE_TAG is $(git rev-parse --short "$RELEASE_TAG^{commit}") $(git log -1 --format=%s "$RELEASE_TAG" | cut -c1-56)"
+  if [[ $DRY_RUN -eq 1 ]]; then info "dry run: would deploy $RELEASE_TAG"; exit 0; fi
+  if [[ $ASSUME_YES -eq 0 ]]; then
+    read -r -p "Deploy $RELEASE_TAG to $SERVICES? [yes/N] " reply
+    [[ "$reply" == "yes" ]] || die "aborted"
+  fi
+  # Detached on purpose: a tag is not a branch, and the checkout must not
+  # drift afterwards. `git checkout $BRANCH` returns to normal deploys.
+  git checkout --quiet "refs/tags/$RELEASE_TAG"
+  build_and_restart
+  printf '\n[deploy] Deployed %s. Return to branch deploys with: git checkout %s\n' \
+    "$RELEASE_TAG" "$BRANCH"
+  exit 0
+fi
+
+# ---------------------------------------------------------------------------
 # Rollback path
 # ---------------------------------------------------------------------------
 if [[ -n "$ROLLBACK_SHA" ]]; then
@@ -473,7 +516,12 @@ step "Preflight"
 
 CURRENT_BRANCH="$(git rev-parse --abbrev-ref HEAD)"
 [[ "$CURRENT_BRANCH" == "$BRANCH" ]] \
-  || die "on branch '$CURRENT_BRANCH', expected '$BRANCH'. Set BOT_BRANCH to deploy something else."
+  || die "on branch '$CURRENT_BRANCH', expected '$BRANCH'.
+        A detached HEAD here usually means a tag or rollback is deployed; the
+        normal path only ever fast-forwards a branch. Options:
+            git checkout $BRANCH                 # back to branch deploys
+            scripts/deploy.sh --release <tag>    # deploy a tag instead
+            BOT_BRANCH=<name> scripts/deploy.sh  # deploy a different branch"
 
 info "fetching origin/$BRANCH"
 git fetch --quiet origin "$BRANCH"
