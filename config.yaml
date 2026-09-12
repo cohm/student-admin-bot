@@ -243,11 +243,13 @@ mattermost:
 # gets every notification at or above min_severity — no primary/fallback.
 notify:
   mattermost_target: ""        # "@user" for a DM, "#channel" for a channel
-  ntfy_server: "https://ntfy.sh"
   ntfy_timeout_seconds: 10.0
   min_severity: "ok"           # ok | warn | critical
-  # The ntfy TOPIC is a shared secret (on a public server, knowing it is enough
-  # to publish), so it comes from NTFY_TOPIC in .env — not from this file.
+  # ntfy's topic AND server both come from .env (NTFY_TOPIC, NTFY_SERVER): the
+  # topic is a shared secret, and a self-hosted server's hostname is internal
+  # infrastructure — this file is committed to a public repository. The
+  # fallback below is only for someone using the public instance.
+  ntfy_server: "https://ntfy.sh"
 
 logging:
   retain_days: 90

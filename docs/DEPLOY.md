@@ -376,9 +376,9 @@ point from the bot on purpose: the job has to be able to report that the bot is
 broken.
 
 **ntfy** is what actually reaches a phone at 04:00, when a Mattermost DM would
-sit unread until morning. Install the ntfy app, subscribe to the topic, done —
-no account needed. Severity maps to ntfy's priority, so a recall drop rings
-through a silenced phone (`5`) while a green week stays below default (`2`):
+sit unread until morning. Severity maps to ntfy's priority, so a recall drop
+rings through a silenced phone (`5`) while a green week stays below default
+(`2`):
 
 | verdict | priority | tag |
 |---|---:|---|
@@ -386,30 +386,59 @@ through a silenced phone (`5`) while a green week stays below default (`2`):
 | warnings | 4 | ⚠️ |
 | recall dropped / run failed | 5 | 🚨 |
 
-The topic is **not** in `config.yaml`. On a public server anyone who knows the
-topic can both read and publish to it, which makes it a password, and
-`config.yaml` is committed. Put it in `.env`:
+**Point it at the self-hosted instance** on the docker-private VM — the
+existing one; nothing new to run. Both the server and the topic go in `.env`,
+not `config.yaml`: the topic is effectively a password (knowing it is enough to
+read *and* publish), and an internal hostname does not belong in a file that is
+committed to a **public** repository.
 
 ```bash
-# .env  — treat like a password
-NTFY_TOPIC=$(openssl rand -hex 12)
-NTFY_TOKEN=                      # only for a protected/self-hosted server
+# .env on the prod VM
+NTFY_SERVER=https://ntfy.example.internal     # or http://100.x.y.z on the tailnet
+NTFY_TOPIC=<the existing topic>
+NTFY_TOKEN=                                   # if the server requires auth
+NTFY_CA_BUNDLE=                               # only for a private CA
 ```
 
-Then subscribe to the same topic in the app (or
-`curl -s https://ntfy.sh/<topic>/json` to watch from a terminal). Empty
-`NTFY_TOPIC` disables the channel.
+Empty `NTFY_TOPIC` disables the channel. Unset `NTFY_SERVER` falls back to
+`https://ntfy.sh`.
+
+Three things to check for a self-hosted server:
+
+- **Reachability from inside the container**, which is not the same as from the
+  VM's shell. A tailnet address works through the host's routing, but verify
+  rather than assume:
+  `docker compose run --rm web python -c "import httpx; print(httpx.get('$NTFY_SERVER/v1/health', timeout=5).text)"`
+- **Auth**, if the server runs `auth-default-access: deny-all`. Mint a token
+  with `ntfy token add <user>` and put it in `NTFY_TOKEN`; without it the
+  publish fails with 403 — loudly, in the job's log, not silently.
+- **TLS**, if it sits behind a private CA. Point `NTFY_CA_BUNDLE` at the root.
+  Certificate verification is never disabled, only redirected.
+
+Plain `http://` is fine on the tailnet or the LAN and the code stays quiet
+about it. To a public host it warns, because the topic travels in the URL path
+and is a publish credential. (Tailscale's `100.64/10` needed an explicit case:
+Python's `ipaddress` does not report CGNAT addresses as private, so the check
+would otherwise have nagged about a perfectly sound tailnet setup.)
 
 **What may be sent this way.** The report is built from `eval/eval_set.yml`
-(checked into the repo) plus chunk counts — no `qa_log` text — which is what
-makes a third-party push service acceptable here. If a future report starts
-quoting real student questions, ntfy has to move to a self-hosted server or go.
+(checked into the repo) plus chunk counts — no `qa_log` text. Self-hosted, that
+keeps it inside our own infrastructure; it is also what would have made
+ntfy.sh acceptable. Anything that would quote real student questions needs the
+self-hosted server, and a second look.
 
 Check the wiring without sending anything real:
 
 ```bash
 docker compose run --rm web student-bot-notify -n --severity critical \
     --message 'test'
+```
+
+Then send one for real, to confirm it arrives on the phone:
+
+```bash
+docker compose run --rm web student-bot-notify --severity critical \
+    --message 'test from prod'
 ```
 
 `min_severity` starts at `ok` so both channels see identical traffic while you

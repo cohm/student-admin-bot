@@ -220,10 +220,12 @@ class NotifyConfig(BaseModel):
     # loudly fails to send.
     mattermost_target: str = ""
 
-    # ntfy.sh-compatible push. The TOPIC is not configured here: on a public
-    # server, knowing the topic is enough to both read and publish, which
-    # makes it a shared secret and config.yaml is committed. It comes from
-    # NTFY_TOPIC in .env; this is only the server to publish to.
+    # ntfy.sh-compatible push. Neither the topic nor, usually, the server
+    # belongs in this file: the topic is a shared secret (on a public server,
+    # knowing it is enough to both read and publish), and a SELF-HOSTED
+    # server's hostname is internal infrastructure — this repository is
+    # public. Both come from .env (NTFY_TOPIC, NTFY_SERVER); the default here
+    # is only a fallback for someone using the public instance.
     ntfy_server: str = "https://ntfy.sh"
     ntfy_timeout_seconds: float = 10.0
 
@@ -398,6 +400,9 @@ class Config(BaseModel):
     # on a public ntfy server that is enough to publish to it.
     ntfy_topic: SecretStr | None = None
     ntfy_token: SecretStr | None = None
+    # PEM bundle for a self-hosted ntfy behind a private CA. Certificate
+    # verification is never disabled; point this at the CA instead.
+    ntfy_ca_bundle: Path | None = None
     # Bearer tokens for OpenAI-compatible cloud providers, keyed by the
     # provider name (e.g. `"berget"` → SecretStr). The loader populates
     # this dict from each provider's `api_key_env`. SecretStr keeps the
@@ -513,6 +518,11 @@ def get_config() -> Config:
         cfg.ntfy_topic = SecretStr(ntfy_topic.strip())
     if ntfy_token := os.environ.get("NTFY_TOKEN"):
         cfg.ntfy_token = SecretStr(ntfy_token.strip())
+    # Self-hosted server, kept out of the committed (and public) config.yaml.
+    if ntfy_server := os.environ.get("NTFY_SERVER"):
+        cfg.notify.ntfy_server = ntfy_server.strip()
+    if ntfy_ca := os.environ.get("NTFY_CA_BUNDLE"):
+        cfg.ntfy_ca_bundle = Path(ntfy_ca).expanduser()
 
     # Override the local Ollama URL without editing yaml (Docker / launchd).
     if ollama_url := os.environ.get("OLLAMA_URL"):

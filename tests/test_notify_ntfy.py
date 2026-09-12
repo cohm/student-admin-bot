@@ -11,7 +11,7 @@ from __future__ import annotations
 import pytest
 from pydantic import SecretStr
 
-from scripts.notify import SEVERITIES, ntfy_request, severity_at_least
+from scripts.notify import SEVERITIES, ntfy_request, plaintext_warning, severity_at_least
 from student_bot.config import NotifyConfig
 
 
@@ -22,6 +22,7 @@ class _Cfg:
         self.notify = NotifyConfig(ntfy_server=server)
         self.ntfy_topic = SecretStr(topic) if topic else None
         self.ntfy_token = SecretStr(token) if token else None
+        self.ntfy_ca_bundle = None
 
 
 def test_topic_is_appended_to_the_server():
@@ -121,3 +122,51 @@ def test_severity_floor(severity, floor, expected):
 def test_a_misconfigured_floor_lets_everything_through():
     """Fail open: a typo in min_severity must not silence the weekly job."""
     assert severity_at_least("ok", "warnn") is True
+
+
+def test_ca_bundle_defaults_to_unset():
+    """Certificate verification is never disabled — a private CA is supplied
+    instead — so the absence of a bundle must mean "use the system store",
+    not "skip the check"."""
+    assert _Cfg().ntfy_ca_bundle is None
+
+
+# --- plaintext topic exposure -------------------------------------------
+#
+# The topic is a publish credential and it travels in the URL path, so plain
+# http to a public host leaks it to anyone on the wire. Plain http to a box on
+# the tailnet or LAN is the expected self-hosted setup and must not nag.
+
+
+def test_https_never_warns():
+    assert plaintext_warning("https://ntfy.sh") is None
+    assert plaintext_warning("https://ntfy.internal.example") is None
+
+
+def test_plain_http_to_a_private_address_is_fine():
+    assert plaintext_warning("http://192.168.1.40") is None
+    assert plaintext_warning("http://10.0.0.5:8080") is None
+
+
+def test_plain_http_to_localhost_is_fine():
+    assert plaintext_warning("http://127.0.0.1:8080") is None
+    assert plaintext_warning("http://localhost:8080") is None
+
+
+def test_plain_http_to_a_tailnet_address_is_fine():
+    """Tailscale uses 100.64/10, which Python's ipaddress does NOT call
+    private — so this needs its own check, and it is the deployment most
+    likely to be plain http."""
+    assert plaintext_warning("http://100.75.42.33") is None
+    assert plaintext_warning("http://100.64.0.1:8080") is None
+
+
+def test_plain_http_to_a_public_address_warns():
+    warning = plaintext_warning("http://1.1.1.1")
+    assert warning is not None
+    assert "credential" in warning
+
+
+def test_an_unresolvable_host_over_http_warns_rather_than_assuming_private():
+    """Fail loud: a name we cannot classify must not produce an all-clear."""
+    assert plaintext_warning("http://nonexistent.invalid") is not None
