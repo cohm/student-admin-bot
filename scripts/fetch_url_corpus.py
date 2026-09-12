@@ -44,6 +44,13 @@ class UrlSeed:
     doc_title_override: str = ""
     # Per-entry override of `cfg.url_ingest.max_pages_per_seed`. None = use global.
     max_pages: int | None = None
+    # Regexes matched against heading text. A matching heading and everything
+    # under it, down to the next heading of the same or higher level, is
+    # dropped before chunking. `exclude_patterns` filters whole URLs; this
+    # filters *within* a page, which is what outward-facing programme pages
+    # need: they carry good descriptive prose next to master-programme and
+    # eligibility claims that must only ever come from the study plans.
+    exclude_sections: list[str] | None = None
 
 
 def _canonicalize_url(url: str) -> str:
@@ -92,6 +99,11 @@ def _load_manifest(path: Path, cfg: Config) -> list[UrlSeed]:
                 exclude_patterns=[str(x) for x in exclude_list] or None,
                 type_hint=str(e.get("type_hint", "auto")).lower(),
                 doc_title_override=str(e.get("doc_title_override", "")).strip(),
+                exclude_sections=(
+                    [str(x) for x in e["exclude_sections"]]
+                    if isinstance(e.get("exclude_sections"), list) and e.get("exclude_sections")
+                    else None
+                ),
                 max_pages=max_pages,
             )
         )
@@ -219,8 +231,43 @@ def _render_contact_card(card: Tag, base_url: str, cfg: Config) -> str:
     return head or tail
 
 
+_HEADING_RE = re.compile(r"^(#{2,6})\s+(.*)$")
+
+
+def drop_excluded_sections(lines: list[str], patterns: list[str] | None) -> list[str]:
+    """Drop headings matching `patterns`, plus everything beneath them.
+
+    "Beneath" means up to the next heading of the same or higher level, so
+    excluding an `##` section also removes its `###` subsections. Non-heading
+    content before the first heading is always kept.
+
+    Filtering here rather than by letting the reranker sort it out is
+    deliberate: a claim that never enters the index cannot outrank the
+    authoritative one. Score-based precedence would have to be re-verified
+    after every embedding or reranker change.
+    """
+    if not patterns:
+        return lines
+    compiled = [re.compile(p, re.IGNORECASE) for p in patterns]
+    out: list[str] = []
+    dropping_at: int | None = None
+    for line in lines:
+        m = _HEADING_RE.match(line)
+        if m:
+            level = len(m.group(1))
+            text = m.group(2).strip()
+            if dropping_at is not None and level <= dropping_at:
+                dropping_at = None  # section ended
+            if dropping_at is None and any(c.search(text) for c in compiled):
+                dropping_at = level
+                continue
+        if dropping_at is None:
+            out.append(line)
+    return out
+
+
 def _extract_html_markdown(
-    payload: bytes, base_url: str, cfg: Config
+    payload: bytes, base_url: str, cfg: Config, exclude_sections: list[str] | None = None
 ) -> tuple[str, str, list[str]]:
     soup = BeautifulSoup(payload, "lxml")
     for t in soup(["script", "style", "noscript", "form", "header", "footer", "nav"]):
@@ -262,6 +309,8 @@ def _extract_html_markdown(
             lines.append(f"{'#' * int(node.name[1])} {txt}")
         else:
             lines.append(txt)
+    lines = drop_excluded_sections(lines, exclude_sections)
+
     # Flatten simple table rows to improve downstream chunk semantics.
     # Use the link-preserving renderer for cell text so e.g. a SCI staff
     # directory's `<a href="/profile/x">Name</a>` cells keep their profile
@@ -526,7 +575,9 @@ def main(limit_seeds: int | None) -> None:
                 body_md, title = _extract_pdf_markdown(payload)
                 content_kind = "application/pdf"
             else:
-                body_md, title, links = _extract_html_markdown(payload, final_url, cfg)
+                body_md, title, links = _extract_html_markdown(
+                    payload, final_url, cfg, exclude_sections=seed.exclude_sections
+                )
                 content_kind = "text/html"
             if seed.doc_title_override:
                 title = seed.doc_title_override
