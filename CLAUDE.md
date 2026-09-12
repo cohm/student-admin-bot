@@ -21,7 +21,7 @@ Entry-point names come from `pyproject.toml` `[project.scripts]`; the `student-b
 - `uv run student-bot-jargon list|proposals|accept|reject|add|remove` — manage `dictionary.json`.
 - `uv run ruff check .` / `uv run ruff format .` — line-length 100, target py311.
 - `uv run pytest -q` — the unit suite under `tests/` (~100 tests). Fast (~3 s); does **not** call the LLM or need Chroma/Ollama.
-- Docker: `docker compose build` (Python 3.12, dependencies from `uv.lock` via `uv sync --frozen`); `docker compose run --rm web python -m scripts.reindex`; `docker compose up -d web mattermost`. Chroma **INTEGER/BLOB** metadata errors usually mean `./data/chroma` was built with another chromadb/Python — delete that directory on the host and reindex.
+- Docker: `docker compose build` (Python 3.12, dependencies from `uv.lock` via `uv sync --frozen`); `docker compose run --rm web python -m scripts.reindex`; `docker compose up -d web mattermost`. The corpus is mounted **read-only** in `web`/`mattermost`, so the scraper cannot run there — use `docker compose run --rm scrape` (a `tools`-profile service that mounts it read-write). Chroma **INTEGER/BLOB** metadata errors usually mean `./data/chroma` was built with another chromadb/Python — delete that directory on the host and reindex.
 
 There **is** a pytest suite under `tests/` (`pytest` is in `[dev]`): url-ingest, dynamic-web allowlist, eligibility fallback, retrieval language bonus, log redaction, memory, and a lint check. It's unit-level (fixtures, no live models). **Separately**, the `eval/` harness (`eval/run_eval.py`) is the de-facto regression check for the retrieval+gate stack — recall@5 + gate accuracy, does not call the LLM — run it after any change to embeddings, reranker, gate logic, or the corpus.
 
