@@ -18,7 +18,14 @@
 - question: "Hur överklagar jag ett betyg?"
   lang: sv
   kind: in_domain
-  expected_doc_substring: "kursplan-betygssystem-och-examination"
+  expected_any:
+    # Label drift (2026-09-12): omprovning-av-betyg is now indexed and wins
+    # this question. It is the page specifically about having a grade
+    # reconsidered, so it is at least as good an answer as the general
+    # regulation — this is the exact case the refine-corpus skill names when
+    # it says to broaden rather than to treat drift as a regression.
+    - "kursplan-betygssystem-och-examination"
+    - "omprovning-av-betyg"
 
 - question: "Vad gäller om jag misstänks för plagiat?"
   lang: sv
@@ -43,7 +50,15 @@
 - question: "Hur ansöker jag om examensbevis från civilingenjörsprogrammet?"
   lang: sv
   kind: in_domain
-  expected_doc_substring: "examina"
+  expected_any:
+    # Label drift (2026-09-12): the corpus gained a practical how-to page that
+    # answers this better than the ordinance does. "Examen - hur och var
+    # ansöker jag?" says outright that you apply via Ladok and quotes the 8-10
+    # week processing time; the Riktlinje is the formal rule behind it. Either
+    # is a correct citation, so accept both rather than call the better one a
+    # regression.
+    - "examina"              # Riktlinje-om-examina... (local degree ordinance)
+    - "www.kth.se/examen-"   # "Examen - hur och var ansöker jag?"
 
 - question: "Vilka stipendier kan jag söka som student?"
   lang: sv
@@ -119,7 +134,14 @@
 - question: "How do I appeal a grade?"
   lang: en
   kind: in_domain
-  expected_doc_substring: "kursplan-betygssystem-och-examination"
+  expected_any:
+    # Label drift (2026-09-12): omprovning-av-betyg is now indexed and wins
+    # this question. It is the page specifically about having a grade
+    # reconsidered, so it is at least as good an answer as the general
+    # regulation — this is the exact case the refine-corpus skill names when
+    # it says to broaden rather than to treat drift as a regression.
+    - "kursplan-betygssystem-och-examination"
+    - "omprovning-av-betyg"
 
 - question: "What happens if I'm suspected of plagiarism?"
   lang: en
@@ -311,6 +333,13 @@
 - question: "Vem är PA för CINEK?"
   lang: sv
   kind: in_domain
-  expected_doc_substring: "ansvariga-for-grundutbildningen-pa-itm"
-  notes: "Control: ITM prints codes, so this worked before expansion too. Guards against a fix for the name-only schools breaking the schools that were fine."
+  expected_any:
+    # KTH moved the ITM programansvariga list from the www page to intra
+    # before 2026-09-12, which this case caught by dropping out of recall@5.
+    # Both are accepted: the www page is still the public entry point and the
+    # list could move back, and accepting only one location would make a
+    # future move look like a retrieval failure again.
+    - "programansvariga-pa-itm"                  # intra.kth.se, current home
+    - "ansvariga-for-grundutbildningen-pa-itm"   # www.kth.se, former home
+  notes: "Control: ITM prints codes, so this worked before programme-code expansion too. Guards against a fix for the name-only schools breaking the schools that were fine."
 

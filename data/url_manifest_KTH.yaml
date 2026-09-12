@@ -225,6 +225,21 @@ entries:
     type_hint: auto
     doc_title_override: ""
 
+  # KTH restructured www.kth.se/itm/.../ansvariga-for-grundutbildningen-pa-itm
+  # some time before 2026-09-12: it went from 35 chunks to 5 and is now a hub
+  # of links, with the actual programansvariga list moved to intra.kth.se.
+  # The eval caught it — "Vem är PA för CINEK?" dropped out of recall@5 — which
+  # is the whole reason that case exists. Seeding the new location restores it.
+  # The old www page stays seeded: it is still the public entry point, and
+  # keeping both means a future move back does not silently break again.
+  - url: https://intra.kth.se/itm/kontakt/utbildningsansvariga/programansvariga-pa-itm-1.1492329
+    follow_links: false
+    max_depth: 1
+    include_patterns: []
+    exclude_patterns: []
+    type_hint: html
+    doc_title_override: ""
+
   # --- Outward-facing programme descriptions (added 2026-09-12) ---
   #
   # The corpus had no answer to "what IS this programme?". Asked about CTFYS,
