@@ -327,7 +327,16 @@ _PROGRAMME_IDENTITY_RE = re.compile(
     r"|skillnad\w*|difference\s+between"
     r"|vad\s+heter|vad\s+st[åa]r\s+\w+\s+f[öo]r\b"
     r"|fokuserar\s+p[åa]|focus(?:es)?\s+on"
-    r"|vad\s+finns\s+det\s+f[öo]r\s+program|vilka\s+program\w*\s+finns)",
+    r"|vad\s+finns\s+det\s+f[öo]r\s+program|vilka\s+program\w*\s+finns"
+    # "Vad är CTFYS?" — the commonest way to ask what something is, and the
+    # one shape the first pass of this missed. The five-letter token must
+    # follow immediately, which is what separates it from "Vad är det för
+    # krav ..." (three letters) and "Vad är kravet ..." (six): those are
+    # about requirements, which DO vary by cohort. Reached only after a
+    # programme candidate has already been resolved, so the token is
+    # effectively always the programme.
+    r"|(?:vad|vilket|vilken)\s+(?:är|ar)\s+(?:programmet\s+|programkoden\s+)?[a-zåäö]{5}\b"
+    r"|what\s+(?:is|are)\s+(?:the\s+programmes?\s+)?[a-z]{5}\b)",
     re.IGNORECASE,
 )
 

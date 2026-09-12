@@ -467,7 +467,7 @@ def _rerank_web_chunks(
     is_master_intent = _question_is_master_eligibility(query)
     try:
         pairs = [(query, c.text) for c in chunks]
-        scores = get_reranker(cfg).predict(pairs).tolist()
+        scores = get_reranker(cfg).predict(pairs, batch_size=cfg.reranker.batch_size).tolist()
         for c, s in zip(chunks, scores):
             c.rerank_score = float(s)
         if query_language and cfg.reranker.language_bonus:
