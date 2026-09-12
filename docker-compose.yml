@@ -63,5 +63,44 @@ services:
       - ${CORPUS_HOST_PATH:-./docs/corpus}:/app/docs/corpus:ro
       - hf_cache:/hfcache
 
+  # Maintenance only — the ONE place the corpus is mounted read-write.
+  #
+  # `student-bot-fetch-url-corpus` writes scraped markdown into docs/corpus,
+  # so it cannot run in `web` or `mattermost`: both mount the corpus `:ro` on
+  # purpose, because the running app must never modify its own knowledge base.
+  # Trying it there fails with "Read-only file system".
+  #
+  # Behind a profile, so `docker compose up -d` never starts it — it has no
+  # long-running command and would exit immediately. Run it explicitly:
+  #
+  #     docker compose run --rm scrape
+  #
+  # then reindex (which writes data/chroma, already read-write) with:
+  #
+  #     docker compose run --rm web python -m scripts.reindex
+  #
+  # On a host without `uv` this is the only way to refresh the corpus. Files
+  # land root-owned, which is fine where every corpus operation goes through a
+  # container, but would block a later host-side scrape on a host that has uv.
+  scrape:
+    profiles: ["tools"]
+    build:
+      context: .
+      args:
+        STUDENT_BOT_VERSION: ${STUDENT_BOT_VERSION:-}
+    image: student-bot:latest
+    env_file: .env
+    command: ["student-bot-fetch-url-corpus"]
+    environment:
+      STUDENT_BOT_ROOT: /app
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    volumes:
+      - ./config.yaml:/app/config.yaml:ro
+      # Writes url_source_map.json and url_filtered_links_report.json here.
+      - ./data:/app/data
+      # Read-WRITE, unlike every other service. This is the whole point.
+      - ${CORPUS_HOST_PATH:-./docs/corpus}:/app/docs/corpus
+
 volumes:
   hf_cache:

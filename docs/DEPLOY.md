@@ -249,6 +249,36 @@ instead — it adds checksums, a manifest, and an online SQLite copy.
 
 ---
 
+## Refreshing the corpus on prod
+
+The VM has no `uv`, so everything runs through containers. Two steps, and they
+use different services on purpose:
+
+```bash
+cd ~/student-admin-bot
+docker compose run --rm scrape                          # scrape -> docs/corpus
+docker compose run --rm web python -m scripts.reindex   # corpus -> data/chroma
+docker compose run --rm web python -m eval.run_eval     # confirm nothing broke
+```
+
+**Why a separate `scrape` service.** `web` and `mattermost` mount the corpus
+`:ro`, because a running app must never modify its own knowledge base. The
+scraper writes to it, so in those services it fails with `[Errno 30]
+Read-only file system`. `scrape` is the one service that mounts it read-write,
+and it sits behind a `tools` profile so `docker compose up -d` never starts
+it.
+
+**Always run the eval afterwards.** A scrape can silently lose content when
+KTH restructures a page: on 2026-09-12 the ITM programansvariga list moved to
+intra.kth.se and that page dropped from 35 chunks to 5, which would have
+quietly broken every "who is PA for ..." question. Recall@5 caught it. Expect
+`43/43`; if it is lower, run with `--show-failures` and look at what moved
+before doing anything else.
+
+Files written this way are root-owned, which is fine here because every corpus
+operation on this host goes through a container. On a host that does have
+`uv`, prefer `uv run student-bot-fetch-url-corpus` so ownership stays sane.
+
 ## Backups, and handing a snapshot to a collaborator
 
 `uv run student-bot-backup` (`scripts/backup.py`) snapshots the on-disk state
