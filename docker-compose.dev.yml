@@ -1,11 +1,11 @@
 services:
-  bot:
+  mattermost:
     volumes:
       - ./src:/app/src
       - ./scripts:/app/scripts
       - ./eval:/app/eval
 
-  beta-web:
+  web:
     volumes:
       - ./src:/app/src
       - ./scripts:/app/scripts

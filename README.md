@@ -101,7 +101,7 @@ Compose defines two services that share the same image:
 | Service | Purpose |
 |---|---|
 | **`bot`** | Default container **`CMD`** is the Mattermost websocket client (`mattermost_client`). |
-| **`beta-web`** | Runs **`student-bot-web`** bound to **`0.0.0.0:8000`** with **`WEB_AUTH_ENABLED=true`** for beta testers. |
+| **`web`** | Runs **`student-bot-web`** bound to **`0.0.0.0:8000`** with **`WEB_AUTH_ENABLED=true`** for beta testers. |
 
 Both services set **`STUDENT_BOT_ROOT=/app`** so paths from **`config.yaml`** resolve correctly inside Linux (editable installs do not always infer the repo root from `__file__`). **`paths.docs_dir`** defaults to **`docs/corpus`** relative to that root → **`/app/docs/corpus`** in the container.
 
@@ -113,11 +113,11 @@ Both services set **`STUDENT_BOT_ROOT=/app`** so paths from **`config.yaml`** re
 
 ### Environment (`.env`)
 
-Copy **`.env.example`** → **`.env`**. Beyond Mattermost and **`USER_ID_HASH_SALT`**, beta-web expects:
+Copy **`.env.example`** → **`.env`**. Beyond Mattermost and **`USER_ID_HASH_SALT`**, web expects:
 
 | Variable | Role |
 |---|---|
-| **`WEB_ACCESS_TOKEN`** | Required when auth is on (Compose enables it for `beta-web`). Generate once: `python -c "import secrets; print(secrets.token_urlsafe(32))"`. Users open **`http://<host>:8000/?access=<token>`** once so the server sets the session cookie (see **Web app** below). |
+| **`WEB_ACCESS_TOKEN`** | Required when auth is on (Compose enables it for `web`). Generate once: `python -c "import secrets; print(secrets.token_urlsafe(32))"`. Users open **`http://<host>:8000/?access=<token>`** once so the server sets the session cookie (see **Web app** below). |
 | **`WEB_SESSION_SECRET`** | Recommended for Docker: stable signing key so sessions survive container restarts. Generate once: `python -c "import secrets; print(secrets.token_hex(32))"`. If unset, each process start picks a new random key and browsers lose the grant cookie. |
 | **`CORPUS_HOST_PATH`** | Optional; see Corpus bind mount. |
 
@@ -140,16 +140,16 @@ All ingestion and citation **`/docs/…`** URLs use **`paths.docs_dir`**; an ext
 
 ```bash
 docker compose build
-docker compose run --rm beta-web python -m scripts.reindex   # persist ./data on host (Chroma + SQLite paths from config)
+docker compose run --rm web python -m scripts.reindex   # persist ./data on host (Chroma + SQLite paths from config)
 # Auth requires data/web_users to exist before the server stays up:
-docker compose run --rm beta-web student-bot-mkuser alice --password '…'
-docker compose up -d beta-web
-# helper: starts beta-web + bot (optionally rebuild first)
+docker compose run --rm web student-bot-mkuser alice --password '…'
+docker compose up -d web
+# helper: starts web + bot (optionally rebuild first)
 uv run student-bot-up
 uv run student-bot-up --build
 # helper: dev mode with bind-mounted code (often no rebuild needed)
 uv run student-bot-up --dev
-# helper: stops beta-web + bot
+# helper: stops web + bot
 uv run student-bot-down
 # snapshot data/ (Chroma index + SQLite) into data/backups/ — see docs/DEPLOY.md
 uv run student-bot-backup --only chroma
@@ -158,44 +158,44 @@ uv run student-bot-backup --only chroma
 Logs (**stderr only**; there are no rotating web log files in the container):
 
 ```bash
-docker compose logs -f beta-web
+docker compose logs -f web
 ```
 
 Structured Q&A / feedback lives in **`data/logs.sqlite`** on the host (mounted **`./data:/app/data`**).
 
-**Mattermost + web:** start **`bot`** as well, e.g. **`docker compose up -d beta-web bot`**.
+**Mattermost + web:** start **`bot`** as well, e.g. **`docker compose up -d web mattermost`**.
 
-**Reindex without Mattermost:** **`docker compose run --rm bot python -m scripts.reindex`** (equivalent image).
+**Reindex without Mattermost:** **`docker compose run --rm mattermost python -m scripts.reindex`** (equivalent image).
 
 ### When to rebuild vs restart
 
 | Change | Action |
 |---|---|
 | **Python / static assets under `src/`**, **`Dockerfile`**, **`scripts/`**, etc. | **`docker compose build`** then **`docker compose up -d …`** |
-| **Only `.env`** (tokens, **`WEB_SESSION_SECRET`**, **`CORPUS_HOST_PATH`**) | **`docker compose up -d`** or **`docker compose restart beta-web`** — **no** rebuild |
+| **Only `.env`** (tokens, **`WEB_SESSION_SECRET`**, **`CORPUS_HOST_PATH`**) | **`docker compose up -d`** or **`docker compose restart web`** — **no** rebuild |
 
 (Optional dev workflow: bind-mount code into containers to iterate without rebuilding:
-`uv run student-bot-up --dev` uses `docker-compose.dev.yml` with `./src`, `./scripts`, and `./eval` mounts for both `beta-web` and `bot`.)
+`uv run student-bot-up --dev` uses `docker-compose.dev.yml` with `./src`, `./scripts`, and `./eval` mounts for both `web` and `bot`.)
 
 ### Memory on macOS
 
-Docker Desktop runs Linux in a **VM**: total Docker RAM in Activity Monitor is often **much larger** than **`docker stats`** for a single container. Lower **Settings → Resources → Memory** if you need RAM for **Ollama** on the host; **`docker compose stop beta-web`** when you are not testing frees the embedding stack inside the VM.
+Docker Desktop runs Linux in a **VM**: total Docker RAM in Activity Monitor is often **much larger** than **`docker stats`** for a single container. Lower **Settings → Resources → Memory** if you need RAM for **Ollama** on the host; **`docker compose stop web`** when you are not testing frees the embedding stack inside the VM.
 
 ### Troubleshooting (beta web)
 
 - **`[error 403]`** on chat: the **`?access=`** session grant failed — reload the **full** invite URL with **`WEB_ACCESS_TOKEN`**, keep **`WEB_SESSION_SECRET`** stable, and use **one hostname** (do not mix **`localhost`** and **`127.0.0.1`** for the same session cookie).
-- **`[stream error: Load failed]`**: the browser lost the SSE connection mid-reply — check **`docker compose logs beta-web`** at that time (Ollama stalls, timeouts, or host RAM pressure). **`check server logs`** + **`ollama ps`** on the host.
+- **`[stream error: Load failed]`**: the browser lost the SSE connection mid-reply — check **`docker compose logs web`** at that time (Ollama stalls, timeouts, or host RAM pressure). **`check server logs`** + **`ollama ps`** on the host.
 
 ### Image notes
 
-- The image uses **Python 3.12** (aligned with **`requires-python`** in **`pyproject.toml`**) and **`uv sync --frozen`** against **`uv.lock`**, so the container’s **chromadb** build matches local **`uv sync`** installs. If you still see Chroma errors like **`metadata segment`** / **`INTEGER` vs `BLOB`**, the host **`./data/chroma`** directory was likely written by a different client: stop the stack, remove **`./data/chroma`**, then **`docker compose run --rm bot python -m scripts.reindex`**.
+- The image uses **Python 3.12** (aligned with **`requires-python`** in **`pyproject.toml`**) and **`uv sync --frozen`** against **`uv.lock`**, so the container’s **chromadb** build matches local **`uv sync`** installs. If you still see Chroma errors like **`metadata segment`** / **`INTEGER` vs `BLOB`**, the host **`./data/chroma`** directory was likely written by a different client: stop the stack, remove **`./data/chroma`**, then **`docker compose run --rm mattermost python -m scripts.reindex`**.
 - **Upgrading from chromadb 0.6.x → 1.x** (the Rust-core rewrite, `chroma-hnswlib` is gone): an existing **`./data/chroma`** is migrated **in place** the first time a 1.x client opens it — no reindex needed, but back the directory up first (`cp -R data/chroma data/chroma.bak-0.6.3`). A 0.6.3 client can still read the migrated directory, so a rollback does not force a rebuild.
 - The Dockerfile installs **`torch`** from **CPU-only** wheels for Linux (see **`pyproject.toml`** **`[tool.uv.sources]`** / PyTorch CPU index) so the image does not pull NVIDIA CUDA packages.
 - **`topics.yaml`** and **`data/dictionary.json`** are **`COPY`**’d into the image as a fallback for non-compose runs. Compose host-mounts **`config.yaml`**, **`./data`** (which contains the dictionary, proposals, logs, Chroma + index, and web users), and the corpus on top, so jargon proposals submitted via the running bot/web and the host’s **`student-bot-jargon`** CLI share the same files.
 
 ### Public hosting (reverse proxy, TLS, Tailscale)
 
-The container binds **`127.0.0.1:8000`** only; a **reverse proxy (nginx)** terminates TLS and serves the public **`/betabot/`** URL. Host-level setup — the nginx config, why nginx must run **as root** to bind 443, the recurring **Tailscale ↔ port-443 clash** (and its one-line fix), the **LiteLLM gateway** provider, and a **new-host checklist** — lives in **[`docs/DEPLOY.md`](docs/DEPLOY.md)**.
+The container binds **`127.0.0.1:8000`** only; a **reverse proxy** (Caddy on the current VM) terminates TLS and serves the app at the root of its own subdomain. Host-level setup — the nginx config, why nginx must run **as root** to bind 443, the recurring **Tailscale ↔ port-443 clash** (and its one-line fix), the **LiteLLM gateway** provider, and a **new-host checklist** — lives in **[`docs/DEPLOY.md`](docs/DEPLOY.md)**.
 
 ---
 
@@ -497,7 +497,7 @@ retrieval but cannot escalate. `.env`, `data/` (including
 
 ## Web app
 
-Localhost-only by default. Two-factor authentication when exposed to a network. For running the authenticated web UI under Docker Compose (**`beta-web`**), secrets, corpus mounts, and logs, see **Docker (Compose)** earlier in this file.
+Localhost-only by default. Two-factor authentication when exposed to a network. For running the authenticated web UI under Docker Compose (**`web`**), secrets, corpus mounts, and logs, see **Docker (Compose)** earlier in this file.
 
 | Mode | How |
 |---|---|

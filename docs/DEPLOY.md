@@ -8,25 +8,30 @@ this file is only the layer **in front of and around** the container.
 
 ---
 
-## Reverse proxy (nginx + TLS)
+## Reverse proxy (TLS)
 
 The container binds **`127.0.0.1:8000`** only (see `docker-compose.yml`,
-`beta-web`). Public access goes through **nginx**, which terminates TLS on
-**:443** and proxies the `/betabot/` prefix to the app:
+`web`). Public access goes through a reverse proxy that terminates TLS on
+**:443**:
 
 ```
-https://<host>/betabot/   --nginx-->   http://127.0.0.1:8000/betabot/   (Docker)
+https://chatbot.particle.kth.se/   --proxy-->   http://127.0.0.1:8000/   (Docker)
 ```
 
-- The app is mounted under that prefix via **`WEB_BASE_PATH=/betabot`** (compose
-  env). nginx passes the prefix through unchanged — do **not** strip it.
-- Server block lives at `/opt/homebrew/etc/nginx/servers/betabot.conf` (macOS
-  Homebrew layout). It also redirects `:80 → :443` and 404s the raw app paths
-  (`/api/`, `/static/`, `/docs/`) so only `/betabot/` is reachable from outside.
+- **The app is served at the site root**, via `WEB_BASE_PATH: ""` in compose.
+  It used to sit under a `/betabot/` prefix on a shared host; it moved to its
+  own subdomain on 2026-06-24 and the prefix is gone. `WEB_BASE_PATH` still
+  exists for hosts that need a prefix — set it and the proxy must pass the
+  prefix through unchanged, **not** strip it.
+- The current VM uses **Caddy**. The nginx notes below are from the earlier
+  macOS host and are kept because the 443 clash they describe is not
+  nginx-specific.
 - Auth is two layers (`README.md` → *Web app*): first visit with
   `?access=<WEB_ACCESS_TOKEN>` sets the session cookie, then HTTP Basic from
-  `data/web_users` (`student-bot-mkuser <name>`). A bare `/betabot/` returning
-  **403** is the access-token gate working, not an outage.
+  `data/web_users` (`student-bot-mkuser <name>`). With KTH SSO enabled, `/`
+  redirects to ADFS instead and the account must also appear in
+  `data/web_users`. A bare `/` returning **403** is the gate working, not an
+  outage.
 
 ### nginx must run as root, and survive reboot
 
@@ -70,7 +75,7 @@ tailscale serve status                    # shows the conflicting :443 serve con
 ```bash
 tailscale serve reset            # frees 443; does NOT touch tailnet VPN / SSH / screen-sharing
 sudo brew services start nginx   # rebind 443 as root
-curl -sk -o /dev/null -w "%{http_code}\n" https://127.0.0.1/betabot/   # expect 403 (= chain works)
+curl -sk -o /dev/null -w "%{http_code}\n" https://127.0.0.1/   # expect 403 (= chain works)
 ```
 
 **The rule:** on any host that fronts the public site, **never configure
@@ -140,7 +145,8 @@ LLM_ACTIVE=litellm/qwen3.6 uv run student-bot-cli "Vilka krav gäller för maste
 
 When relocating (the new host also runs Tailscale):
 
-1. **Reverse proxy:** install nginx, copy the `betabot.conf` server block,
+1. **Reverse proxy:** install the proxy (Caddy on the current VM), copy its
+   server block,
    install TLS certs, and start it **as root** so it can bind 443 (LaunchDaemon
    on macOS, a systemd unit on Linux — order it **after** `tailscaled` if both
    run there).
@@ -148,7 +154,7 @@ When relocating (the new host also runs Tailscale):
 3. **Container → tailnet reachability:** verify the bot container can reach the
    LiteLLM `100.x` address. Test from inside the container:
    ```bash
-   docker compose exec beta-web python -c "import socket; socket.create_connection(('100.75.42.33',4000),5)"
+   docker compose exec web python -c "import socket; socket.create_connection(('100.75.42.33',4000),5)"
    ```
    On Docker Desktop/macOS this works out of the box (the VM routes via the host
    Tailscale). On native Linux Docker it generally works too; if MagicDNS is
@@ -159,6 +165,35 @@ When relocating (the new host also runs Tailscale):
    index is host-specific (see `README.md` *Image notes* re: chromadb mismatch).
 
 ---
+
+## ⚠️ One-time: the v0.1.0 service rename
+
+The compose services were `bot` and `beta-web` (containers `student-bot` and
+`student-bot-beta-web`) until v0.1.0. They are now `mattermost` and `web`
+(containers `student-bot-mm` and `student-bot-web`). "beta" had been wrong for
+months — the web UI has been the production interface since June.
+
+**Do not deploy this with a plain `up -d`.** Compose keys containers off the
+service name, so the renamed services start as *new* containers and the old
+ones keep running as orphans. For `web` the second bind to `127.0.0.1:8000`
+merely fails, noisily but harmlessly. For the Mattermost bot **both containers
+stay connected and both answer every DM** — students see doubled replies.
+
+Once, on the upgrade:
+
+```bash
+cd ~/student-admin-bot
+docker compose down                 # stops BOTH old containers by their old names
+git pull --ff-only                  # or: scripts/deploy.sh --release v0.1.0
+scripts/deploy.sh --rebuild
+docker compose ps                   # expect exactly student-bot-mm + student-bot-web
+```
+
+`docker compose down` removes containers and the project network, not named
+volumes, so `hf_cache` survives and nothing re-downloads. `./data` is a bind
+mount and is untouched either way.
+
+After this, ordinary deploys go back to the normal path.
 
 ## Deploying: `scripts/deploy.sh`
 
@@ -252,7 +287,7 @@ bind-mounted so the archive lands on the host either way.
 ```cron
 # 3-deep rolling full backup, 02:17 nightly — finishes well before the host
 # snapshots this VM at 03:00, so that snapshot contains a complete archive.
-17 2 * * * cd $HOME/student-admin-bot && docker compose run --rm beta-web \
+17 2 * * * cd $HOME/student-admin-bot && docker compose run --rm web \
     student-bot-backup --keep 3 >> $HOME/bot-backup.log 2>&1
 ```
 
@@ -299,10 +334,10 @@ uv run student-bot-backup --only chroma          # ~11 MB for the current corpus
 
 # b) no uv on the host — run it in the container (needs an image built after
 #    this script landed; `./data` is bind-mounted, so the output is on the host)
-docker compose run --rm beta-web student-bot-backup --only chroma
+docker compose run --rm web student-bot-backup --only chroma
 
 # c) neither — plain tar. No MANIFEST/checksums, and stop the stack first if a
-#    reindex could be running: `docker compose stop bot beta-web`
+#    reindex could be running: `docker compose stop mattermost web`
 tar -czf data/backups/chroma-$(date +%F).tar.gz -C data chroma
 ```
 

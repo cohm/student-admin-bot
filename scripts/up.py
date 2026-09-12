@@ -47,8 +47,8 @@ def main(build: bool, dev: bool) -> None:
         click.echo("Building Docker images...")
         subprocess.run([*compose_cmd, "build"], cwd=root, check=True)
 
-    click.echo("Starting beta-web and bot...")
-    subprocess.run([*compose_cmd, "up", "-d", "beta-web", "bot"], cwd=root, check=True)
+    click.echo("Starting web and mattermost...")
+    subprocess.run([*compose_cmd, "up", "-d", "web", "mattermost"], cwd=root, check=True)
 
     if perf_on:
         click.echo("Performance panel is enabled. Start host metrics collector:")
