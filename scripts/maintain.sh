@@ -54,6 +54,12 @@
 #   BOT_MAINT_NOTIFY     '@user' / '#channel' for Mattermost. Default:
 #                        notify.mattermost_target in config.yaml. ntfy, if
 #                        NTFY_TOPIC is set, always fires alongside it.
+#   BOT_HEALTH_URL       Polled after the restart, to confirm the service came
+#                        back. Default: http://127.0.0.1:8000/api/health.
+#                        Authenticated by design — 401/403 count as healthy.
+#   BOT_HEALTH_WAIT      Seconds to wait for it. Default: 180 (the models load
+#                        on startup, and the page cache is cold after a reindex
+#                        has just walked the whole corpus).
 #   BOT_MAINT_MAX_MINUTES  Report the run as slow above this. Default: 45.
 #                        Steady state is ~9 min and the worst catch-up run
 #                        measured was 21 min, so 45 means "stuck", not "busy".
@@ -91,6 +97,8 @@ cd "$REPO_ROOT"
 MAINT_DIR="${BOT_MAINT_DIR:-$REPO_ROOT/data/maintenance}"
 KEEP="${BOT_MAINT_KEEP:-4}"
 MAX_MINUTES="${BOT_MAINT_MAX_MINUTES:-45}"
+HEALTH_URL="${BOT_HEALTH_URL:-http://127.0.0.1:8000/api/health}"
+HEALTH_WAIT="${BOT_HEALTH_WAIT:-180}"
 MIN_FREE_GB="${BOT_MAINT_MIN_FREE_GB:-4}"
 MAX_CHURN="${BOT_MAINT_MAX_CHURN:-150}"
 SERVICES="${BOT_SERVICES:-web mattermost}"
@@ -122,6 +130,7 @@ STAMP="$(date -u +%Y%m%dT%H%M%SZ)"
 # Guards
 # ---------------------------------------------------------------------------
 command -v docker >/dev/null || { echo "[maintain] FATAL: docker not found" >&2; exit 1; }
+command -v curl   >/dev/null || { echo "[maintain] FATAL: curl not found" >&2; exit 1; }
 docker compose version >/dev/null 2>&1 || { echo "[maintain] FATAL: no 'docker compose'" >&2; exit 1; }
 
 mkdir -p "$MAINT_DIR"
@@ -228,7 +237,8 @@ if [[ $DRY_RUN -eq 1 ]]; then
   4. reindex data/chroma      (in place)
   5. eval (after)             -> $AFTER_JSON
   6. restart: $SERVICES       (required — see the header)
-  7. compare and report to ${NOTIFY_TARGET:-<mattermost.notify_target>}
+  7. poll $HEALTH_URL         (up to ${HEALTH_WAIT}s)
+  8. compare and report to ${NOTIFY_TARGET:-<notify.mattermost_target>}
 PLAN
   exit 0
 fi
@@ -303,12 +313,41 @@ step "Restarting $SERVICES to pick up the new index"
 # shellcheck disable=SC2086
 dc restart $SERVICES || die "restart failed — services may still be serving the OLD index"
 
+# `docker compose restart` returns when the CONTAINERS are up, not when the app
+# is serving: web loads bge-m3 and the cross-encoder on startup, which takes
+# appreciably longer than the restart itself. Without this poll the job would
+# report a cheerful green while the service that is supposed to answer students
+# never came back — at 04:00, unattended, with nobody to notice until morning.
+# Same semantics as scripts/deploy.sh: 401/403 prove uvicorn is serving and the
+# auth gate is wired, so they count as healthy.
+step "Waiting for $HEALTH_URL"
+t0=$(date +%s)
+waited=0
+code=000
+while (( waited < HEALTH_WAIT )); do
+  # curl already prints 000 on a connection failure, so `|| echo 000` would
+  # concatenate and report "000000". Catch the non-zero exit instead.
+  code="$(curl -sS -o /dev/null -w '%{http_code}' --max-time 5 "$HEALTH_URL" 2>/dev/null)" || code=""
+  code="${code:-000}"
+  case "$code" in 200|401|403) break ;; esac
+  sleep 3
+  waited=$(( waited + 3 ))
+done
+case "$code" in
+  200|401|403) info "healthy (HTTP $code after ${waited}s)"
+               RESTART_S=$(( $(date +%s) - t0 )) ;;
+  *)
+    dc ps || true
+    dc logs --tail=40 web || true
+    die "web did not answer at $HEALTH_URL after ${HEALTH_WAIT}s (last: $code).
+    The index was rebuilt and the eval ran; it is the RESTART that failed.
+    Inspect: docker compose logs -f web" ;;
+esac
+
 # ---------------------------------------------------------------------------
 # 7. Compare and report.
 # ---------------------------------------------------------------------------
 step "Comparing"
-TOTAL_S=$(( $(date +%s) - STARTED_EPOCH ))
-
 compare_args=(--after "$c_after" --max-churn "$MAX_CHURN"
               --title "Weekly maintenance on $(hostname)")
 [[ -f "$BEFORE_JSON" ]] && compare_args+=(--before "$c_before")
@@ -333,6 +372,11 @@ Check \`$AFTER_JSON\` by hand."
   VERDICT=2
 fi
 
+# Measured here, after the comparison, rather than before it: the compare and
+# the notification each start a container, and a duration that silently omits
+# them is the wrong number to track drift against.
+TOTAL_S=$(( $(date +%s) - STARTED_EPOCH ))
+
 fmt() { printf '%dm %02ds' $(( $1 / 60 )) $(( $1 % 60 )); }
 
 TIMINGS="| phase | duration |
@@ -342,6 +386,7 @@ TIMINGS="| phase | duration |
 | scrape | $(fmt $SCRAPE_S) |
 | reindex | $(fmt $REINDEX_S) |
 | eval (after) | $(fmt $EVAL_AFTER_S) |
+| restart + health | $(fmt ${RESTART_S:-0}) |
 | **total** | **$(fmt $TOTAL_S)** |"
 
 # Duration, not wall-clock: the job runs at 04:00, after the host snapshot, so
