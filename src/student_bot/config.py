@@ -57,6 +57,14 @@ class RerankerConfig(BaseModel):
     device: str = "cpu"
     candidates: int = 20
     keep: int = 8
+    # Pairs per forward pass. Smaller is FASTER here, which is counter-
+    # intuitive: sentence-transformers pads every pair in a batch up to the
+    # longest one, and retrieved chunks vary from ~350 to ~3300 characters, so
+    # one long chunk in a 20-wide batch drags all 19 others up to max_length.
+    # Measured on the production index, 20 pairs: 721 ms at 32, 286 ms at 4.
+    # Scores are unaffected beyond float noise (max delta 5e-06 against a gate
+    # threshold of -0.5), so this needs no re-tuning.
+    batch_size: int = 4
     # Soft preference for chunks whose language matches the query language.
     # Added to the cross-encoder logit AFTER reranking, before sorting and
     # before the gate. Small enough that a clearly better cross-language

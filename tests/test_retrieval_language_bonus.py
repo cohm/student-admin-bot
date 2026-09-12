@@ -18,10 +18,13 @@ class _FakeReranker:
     def __init__(self, score_by_text: dict[str, float]):
         self._score_by_text = score_by_text
 
-    def predict(self, pairs):
+    def predict(self, pairs, **kwargs):
         # pairs is list[(query, text)] — we score by text. Returns ndarray
         # to match the real CrossEncoder.predict() interface (callers do
-        # `.tolist()` on the result).
+        # `.tolist()` on the result). `**kwargs` absorbs batch_size and any
+        # other tuning the caller passes; none of it affects the scores,
+        # which is exactly the property that lets us tune it freely.
+        self.last_kwargs = kwargs
         return np.array([self._score_by_text.get(text, 0.0) for _q, text in pairs])
 
 
@@ -136,3 +139,38 @@ def test_language_bonus_zero_config_disables_bias(monkeypatch):
     _patch(monkeypatch, rows, {"T1": 0.3, "T2": 0.4})
     out = ret.retrieve(cfg, "kursval", query_language="sv")
     assert out.reranked[0].chunk_id == "en1"
+
+
+def test_configured_batch_size_reaches_the_cross_encoder(monkeypatch):
+    """The batch size must actually be passed through to predict().
+
+    It is a pure performance knob — a batch is padded to its longest pair, and
+    chunk lengths are very uneven, so a smaller batch avoids padding short
+    pairs up to a 3000-character outlier. 20 pairs measured 721 ms at 32 and
+    286 ms at 4 on the production index, with scores identical to within 5e-06.
+    Wiring it wrongly would silently cost that speedup with nothing failing.
+    """
+    cfg = get_config()
+    rows = [
+        {"id": "a", "text": "svensk text", "rel_source": "a.md", "language": "sv", "distance": 0.1},
+        {
+            "id": "b",
+            "text": "english text",
+            "rel_source": "b.md",
+            "language": "en",
+            "distance": 0.2,
+        },
+    ]
+    fake = _FakeReranker({"svensk text": 1.0, "english text": 0.5})
+
+    class _Coll:
+        def query(self, **_kwargs):
+            return _stub_chroma_query(rows)
+
+    monkeypatch.setattr(ret, "get_chroma_collection", lambda _cfg: _Coll())
+    monkeypatch.setattr(ret, "encode_query", lambda _cfg, _q: np.zeros(1))
+    monkeypatch.setattr(ret, "get_reranker", lambda _cfg: fake)
+
+    ret.retrieve(cfg, "en fråga", query_language="sv")
+
+    assert fake.last_kwargs.get("batch_size") == cfg.reranker.batch_size

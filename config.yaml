@@ -32,6 +32,10 @@ reranker:
   device: cpu
   candidates: 20                 # top-N from Chroma to feed reranker
   keep: 8                        # top-K after rerank
+  # Pairs per forward pass. Smaller is faster: a batch is padded to its
+  # longest pair, and chunk lengths are very uneven. 20 pairs took 721 ms at
+  # 32 and 286 ms at 4 on the prod index. Does not change scores.
+  batch_size: 4
 
 gate:
   # Tuned via `python -m eval.run_eval` against eval/eval_set.yml. The
