@@ -76,6 +76,36 @@ class TestYearIndependentQuestions:
     @pytest.mark.parametrize(
         "q",
         [
+            "Vad är CTFYS och TTFYM?",
+            "Vad är TTFYM?",
+            "Vad är ctfys?",
+            "What is TTFYM?",
+        ],
+    )
+    def test_what_is_X_is_an_identity_question(self, q):
+        # The commonest phrasing of all, and the one the first pass missed:
+        # it shed the which-programme prompt only to hit the admission-round
+        # one, so the student saw no change.
+        assert wr._question_is_year_independent(q)
+
+    @pytest.mark.parametrize(
+        "q",
+        [
+            # "Vad är det för krav ..." and "Vad är kravet ..." look similar
+            # but ask about requirements, which DO vary by cohort. The
+            # identity pattern needs the five-letter token to follow "vad är"
+            # immediately; "det" is three letters and "kravet" is six.
+            "Vad är det för krav för studier på avancerad nivå på CTFYS?",
+            "Vad är det för krav för särskild behörighet för KEX-kurserna på CTFYS?",
+            "Vad är kravet för att läsa master på CTFYS?",
+        ],
+    )
+    def test_requirement_questions_are_not_identity_questions(self, q):
+        assert not wr._question_is_year_independent(q)
+
+    @pytest.mark.parametrize(
+        "q",
+        [
             "Vilka kurser ingår första året på CTFYS?",
             "Vad står det i utbildningsplanen för CTFYS?",
             "Vilka mattekurser ingår under första året på CTFYS?",
