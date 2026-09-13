@@ -14,6 +14,7 @@ When auth is enabled, two factors are required:
 from __future__ import annotations
 
 import asyncio
+import html
 import json
 import logging
 import os
@@ -388,6 +389,7 @@ def create_app(cfg: Config | None = None) -> FastAPI:
             "status": "ok",
             "auth_enabled": cfg.web.auth_enabled,
             "performance_panel_enabled": _perf_panel_enabled(cfg),
+            "branding_logo_html": _branding_logo_html(cfg, _join_base(base_path, "/static")),
             "cloud_provider_name": cloud_name,
             # Drives the visibility of admin-only UI (per-stage histograms,
             # the inspect-other-user widget on /stats).
@@ -927,9 +929,35 @@ _NOTICE_HTML = """\
 </div>
 """
 
-# Shared header: centered brand cluster (KTH logo + title + Fraktur F)
-# with the language switch on the right. {tagline_html} is replaced per page;
-# {home} is the chat-home URL the brand title links back to.
+
+# Shared header: centered brand cluster (KTH logo + title, and optionally a
+# deployment's own logo) with the language switch on the right.
+# {tagline_html} is replaced per page; {home} is the chat-home URL the brand
+# title links back to; {branding_html} is empty unless web.branding_logo is set.
+def _branding_logo_html(cfg: Config, static_prefix: str) -> str:
+    """The optional second header logo, or "" when none is configured.
+
+    Absolute URLs pass through; anything else is treated as a filename in the
+    web static directory.
+
+    Escaped with `html.escape`, not the module's `_h()`: `_h` handles & < > for
+    element text and deliberately leaves quotes alone, which is exactly wrong
+    for an attribute value — a quote in the value would close the attribute
+    early. These come from config.yaml rather than a user, so this is about the
+    header rendering correctly on every page, not about an attack.
+    """
+    src = (cfg.web.branding_logo or "").strip()
+    if not src:
+        return ""
+    if not re.match(r"^https?://", src):
+        src = f"{static_prefix}/{src.lstrip('/')}"
+    alt = (cfg.web.branding_logo_alt or "").strip()
+    return (
+        f'<img src="{html.escape(src, quote=True)}" '
+        f'alt="{html.escape(alt, quote=True)}" class="logo logo-branding">'
+    )
+
+
 _HEADER_HTML = """\
 <header>
   <div class="brand">
@@ -938,8 +966,7 @@ _HEADER_HTML = """\
       <div class="brand-text">
         <h1 data-i18n="brand.name"></h1>{tagline_html}
       </div>
-    </a>
-    <img src="{static_prefix}/FrakturF2020.svg" alt="Fysiksektionen" class="logo logo-fyssek">
+    </a>{branding_html}
   </div>
   <div class="lang-switch" role="group" aria-label="Language">
     <button type="button" data-lang="sv">SV</button>
@@ -989,8 +1016,8 @@ def _about_page(cfg: Config, base_path: str = "") -> HTMLResponse:
     )
     body = f"""
 <!doctype html><html lang="sv"><head><meta charset="utf-8"><title>student-bot</title>
-<link rel="stylesheet" href="{static_prefix}/style.css?v=38">{_FAVICON_LINKS.format(static_prefix=static_prefix)}{_NOTICE_SCRIPT.format(static_prefix=static_prefix)}</head>
-<body>{_HEADER_HTML.format(tagline_html="", static_prefix=static_prefix, home=home)}<main>{_NOTICE_HTML}<div class="card">
+<link rel="stylesheet" href="{static_prefix}/style.css?v=39">{_FAVICON_LINKS.format(static_prefix=static_prefix)}{_NOTICE_SCRIPT.format(static_prefix=static_prefix)}</head>
+<body>{_HEADER_HTML.format(tagline_html="", static_prefix=static_prefix, home=home, branding_html=_branding_logo_html(cfg, static_prefix))}<main>{_NOTICE_HTML}<div class="card">
 <h2 data-i18n="about.h2.what"></h2>
 <p data-i18n="about.what.body"></p>
 
@@ -1033,8 +1060,8 @@ def _glossary_page(cfg: Config, base_path: str = "") -> HTMLResponse:
     )
     body = f"""
 <!doctype html><html lang="sv"><head><meta charset="utf-8"><title>student-bot</title>
-<link rel="stylesheet" href="{static_prefix}/style.css?v=38">{_FAVICON_LINKS.format(static_prefix=static_prefix)}{_NOTICE_SCRIPT.format(static_prefix=static_prefix)}</head>
-<body>{_HEADER_HTML.format(tagline_html='<p class="tagline" data-i18n="glossary.tagline"></p>', static_prefix=static_prefix, home=home)}
+<link rel="stylesheet" href="{static_prefix}/style.css?v=39">{_FAVICON_LINKS.format(static_prefix=static_prefix)}{_NOTICE_SCRIPT.format(static_prefix=static_prefix)}</head>
+<body>{_HEADER_HTML.format(tagline_html='<p class="tagline" data-i18n="glossary.tagline"></p>', static_prefix=static_prefix, home=home, branding_html=_branding_logo_html(cfg, static_prefix))}
 <main>{_NOTICE_HTML}<div class="card">
 <table border="1" cellpadding="6" cellspacing="0" style="width:100%; border-collapse: collapse;">
 <thead><tr><th data-i18n="glossary.th.term"></th><th data-i18n="glossary.th.meaning"></th><th data-i18n="glossary.th.def"></th><th data-i18n="glossary.th.lang"></th></tr></thead>
@@ -1144,8 +1171,8 @@ def _md_doc_page(cfg: Config, docs_dir: Path, rel_source: str, base_path: str = 
 
     body = f"""
 <!doctype html><html lang="sv"><head><meta charset="utf-8"><title>{_h(doc.title)}</title>
-<link rel="stylesheet" href="{static_prefix}/style.css?v=38">{_FAVICON_LINKS.format(static_prefix=static_prefix)}{_NOTICE_SCRIPT.format(static_prefix=static_prefix)}</head>
-<body>{_HEADER_HTML.format(tagline_html="", static_prefix=static_prefix, home=home)}
+<link rel="stylesheet" href="{static_prefix}/style.css?v=39">{_FAVICON_LINKS.format(static_prefix=static_prefix)}{_NOTICE_SCRIPT.format(static_prefix=static_prefix)}</head>
+<body>{_HEADER_HTML.format(tagline_html="", static_prefix=static_prefix, home=home, branding_html=_branding_logo_html(cfg, static_prefix))}
 <main><div class="card md-doc">
 <nav class="md-nav">
   <a href="{home}"><span class="lang-sv">← Tillbaka till chatten</span><span class="lang-en">← Back to the chat</span></a>
@@ -1431,8 +1458,8 @@ def _stats_page(
 
     body = f"""
 <!doctype html><html lang="sv"><head><meta charset="utf-8"><title>student-bot</title>
-<link rel="stylesheet" href="{static_prefix}/style.css?v=38">{_FAVICON_LINKS.format(static_prefix=static_prefix)}{_NOTICE_SCRIPT.format(static_prefix=static_prefix)}</head>
-<body>{_HEADER_HTML.format(tagline_html="", static_prefix=static_prefix, home=home)}<main>{_NOTICE_HTML}<div class="card stats-card" data-channel="{channel}" data-is-admin="{1 if is_admin else 0}">
+<link rel="stylesheet" href="{static_prefix}/style.css?v=39">{_FAVICON_LINKS.format(static_prefix=static_prefix)}{_NOTICE_SCRIPT.format(static_prefix=static_prefix)}</head>
+<body>{_HEADER_HTML.format(tagline_html="", static_prefix=static_prefix, home=home, branding_html=_branding_logo_html(cfg, static_prefix))}<main>{_NOTICE_HTML}<div class="card stats-card" data-channel="{channel}" data-is-admin="{1 if is_admin else 0}">
 <h1 data-i18n="stats.title"></h1>
 {channel_switch_html}
 <p class="stats-summary" data-i18n="stats.summary"

@@ -276,6 +276,14 @@ guardrails:
 web:
   bind_host: 127.0.0.1
   port: 8000
+  # Optional second header logo, to the right of the title, for whoever runs
+  # this instance. A filename under src/student_bot/web/static/ or an absolute
+  # URL; empty means none. Default empty on purpose (#71) — the bot is a KTH
+  # service and should not appear to belong to any one section. Set both:
+  #   branding_logo: "FrakturF2020.svg"
+  #   branding_logo_alt: "Fysiksektionen"
+  branding_logo: ""
+  branding_logo_alt: ""
   # Where the corpus is served from. Citations link to <doc_base_url>/<rel_source>.
   # Empty string = no clickable links.
   doc_base_url: /docs
