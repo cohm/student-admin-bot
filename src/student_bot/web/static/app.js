@@ -436,12 +436,29 @@ function applyCloudProviderNotice(providerName) {
 
 let cloudProviderName = "";
 
+// Optional second header logo (web.branding_logo, issue #71). The chat page is
+// a static file, so unlike the server-rendered pages it cannot interpolate
+// config — it asks /api/health instead. Empty by default, in which case
+// nothing is inserted and there is no layout shift.
+function applyBrandingLogo(html) {
+  const brand = el(".brand");
+  if (!brand) return;
+  brand.querySelector(".logo-branding")?.remove();
+  if (!html) return;
+  // Server-generated markup from config.yaml, escaped in _branding_logo_html.
+  const tpl = document.createElement("template");
+  tpl.innerHTML = html.trim();
+  const img = tpl.content.querySelector("img.logo-branding");
+  if (img) brand.appendChild(img);
+}
+
 async function initPerf() {
   try {
     const resp = await fetch("api/health", { credentials: "include" });
     if (!resp.ok) return;
     const data = await resp.json();
     setPerfEnabled(!!data.performance_panel_enabled);
+    applyBrandingLogo(data.branding_logo_html);
     cloudProviderName = data.cloud_provider_name || "";
     applyCloudProviderNotice(cloudProviderName);
     state.isAdmin = !!data.is_admin;

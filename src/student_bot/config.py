@@ -262,6 +262,17 @@ class GuardrailsConfig(BaseModel):
 class WebConfig(BaseModel):
     bind_host: str = "127.0.0.1"
     port: int = 8000
+    # Optional second logo in the header, to the right of the title — for the
+    # organisation running this instance. A filename under the web static dir
+    # (e.g. "FrakturF2020.svg", which ships in the repo) or an absolute URL.
+    # Empty means no second logo, which is the default: the bot is a KTH
+    # service and should not appear to be any one section's, so branding is
+    # something a deployment opts into rather than inherits. See issue #71.
+    branding_logo: str = ""
+    # Alt text for it. Required whenever branding_logo is set — a logo with no
+    # alt text is invisible to a screen reader, and the header is the first
+    # thing it reaches.
+    branding_logo_alt: str = ""
     # Optional URL prefix when serving behind a reverse proxy path, e.g.
     # "/betabot". Empty means app is served from site root.
     base_path: str = ""
