@@ -955,6 +955,17 @@ _NOTICE_SCRIPT = (
     '<script src="{static_prefix}/notice.js?v=33" defer></script>'
 )
 
+# The KTH seal, generated from the logo already in static/ (see
+# scripts/make_favicon.sh). SVG first for a crisp icon at any DPI, with a PNG
+# for anything that ignores it. Kept next to _NOTICE_SCRIPT and interpolated
+# into the same four <head> blocks, so a page cannot pick up one and miss the
+# other.
+_FAVICON_LINKS = (
+    '<link rel="icon" href="{static_prefix}/favicon.svg?v=1" type="image/svg+xml">'
+    '<link rel="icon" href="{static_prefix}/favicon-32.png?v=1" sizes="32x32" type="image/png">'
+    '<link rel="apple-touch-icon" href="{static_prefix}/apple-touch-icon.png?v=1">'
+)
+
 
 def _about_page(cfg: Config, base_path: str = "") -> HTMLResponse:
     link = cfg.fallback.counselor_link
@@ -978,7 +989,7 @@ def _about_page(cfg: Config, base_path: str = "") -> HTMLResponse:
     )
     body = f"""
 <!doctype html><html lang="sv"><head><meta charset="utf-8"><title>student-bot</title>
-<link rel="stylesheet" href="{static_prefix}/style.css?v=38">{_NOTICE_SCRIPT.format(static_prefix=static_prefix)}</head>
+<link rel="stylesheet" href="{static_prefix}/style.css?v=38">{_FAVICON_LINKS.format(static_prefix=static_prefix)}{_NOTICE_SCRIPT.format(static_prefix=static_prefix)}</head>
 <body>{_HEADER_HTML.format(tagline_html="", static_prefix=static_prefix, home=home)}<main>{_NOTICE_HTML}<div class="card">
 <h2 data-i18n="about.h2.what"></h2>
 <p data-i18n="about.what.body"></p>
@@ -1022,7 +1033,7 @@ def _glossary_page(cfg: Config, base_path: str = "") -> HTMLResponse:
     )
     body = f"""
 <!doctype html><html lang="sv"><head><meta charset="utf-8"><title>student-bot</title>
-<link rel="stylesheet" href="{static_prefix}/style.css?v=38">{_NOTICE_SCRIPT.format(static_prefix=static_prefix)}</head>
+<link rel="stylesheet" href="{static_prefix}/style.css?v=38">{_FAVICON_LINKS.format(static_prefix=static_prefix)}{_NOTICE_SCRIPT.format(static_prefix=static_prefix)}</head>
 <body>{_HEADER_HTML.format(tagline_html='<p class="tagline" data-i18n="glossary.tagline"></p>', static_prefix=static_prefix, home=home)}
 <main>{_NOTICE_HTML}<div class="card">
 <table border="1" cellpadding="6" cellspacing="0" style="width:100%; border-collapse: collapse;">
@@ -1133,7 +1144,7 @@ def _md_doc_page(cfg: Config, docs_dir: Path, rel_source: str, base_path: str = 
 
     body = f"""
 <!doctype html><html lang="sv"><head><meta charset="utf-8"><title>{_h(doc.title)}</title>
-<link rel="stylesheet" href="{static_prefix}/style.css?v=38">{_NOTICE_SCRIPT.format(static_prefix=static_prefix)}</head>
+<link rel="stylesheet" href="{static_prefix}/style.css?v=38">{_FAVICON_LINKS.format(static_prefix=static_prefix)}{_NOTICE_SCRIPT.format(static_prefix=static_prefix)}</head>
 <body>{_HEADER_HTML.format(tagline_html="", static_prefix=static_prefix, home=home)}
 <main><div class="card md-doc">
 <nav class="md-nav">
@@ -1420,7 +1431,7 @@ def _stats_page(
 
     body = f"""
 <!doctype html><html lang="sv"><head><meta charset="utf-8"><title>student-bot</title>
-<link rel="stylesheet" href="{static_prefix}/style.css?v=38">{_NOTICE_SCRIPT.format(static_prefix=static_prefix)}</head>
+<link rel="stylesheet" href="{static_prefix}/style.css?v=38">{_FAVICON_LINKS.format(static_prefix=static_prefix)}{_NOTICE_SCRIPT.format(static_prefix=static_prefix)}</head>
 <body>{_HEADER_HTML.format(tagline_html="", static_prefix=static_prefix, home=home)}<main>{_NOTICE_HTML}<div class="card stats-card" data-channel="{channel}" data-is-admin="{1 if is_admin else 0}">
 <h1 data-i18n="stats.title"></h1>
 {channel_switch_html}
