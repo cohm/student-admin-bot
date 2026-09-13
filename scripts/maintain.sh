@@ -237,7 +237,7 @@ if [[ $DRY_RUN -eq 1 ]]; then
   4. reindex data/chroma      (in place)
   5. eval (after)             -> $AFTER_JSON
   6. restart: $SERVICES       (required — see the header)
-  7. poll $HEALTH_URL         (up to ${HEALTH_WAIT}s)
+  7. poll $HEALTH_URL, and confirm every service is still running
   8. compare and report to ${NOTIFY_TARGET:-<notify.mattermost_target>}
 PLAN
   exit 0
@@ -334,8 +334,7 @@ while (( waited < HEALTH_WAIT )); do
   waited=$(( waited + 3 ))
 done
 case "$code" in
-  200|401|403) info "healthy (HTTP $code after ${waited}s)"
-               RESTART_S=$(( $(date +%s) - t0 )) ;;
+  200|401|403) info "healthy (HTTP $code after ${waited}s)" ;;
   *)
     dc ps || true
     dc logs --tail=40 web || true
@@ -343,6 +342,28 @@ case "$code" in
     The index was rebuilt and the eval ran; it is the RESTART that failed.
     Inspect: docker compose logs -f web" ;;
 esac
+
+# The health poll only covers `web`. The Mattermost bot has no HTTP endpoint
+# and is the interface most students actually use, so it would fail silently:
+# a bad config throws on startup, `restart: unless-stopped` loops it, and the
+# job reports green while the bot is answering nobody.
+#
+# Settle first. `docker compose restart` returns once the container is running,
+# which is before a startup exception has had time to happen — checking
+# immediately would see "running" for a container about to die.
+sleep 5
+running="$(dc ps --services --filter status=running 2>/dev/null || true)"
+for svc in $SERVICES; do
+  if ! printf '%s\n' "$running" | grep -qx "$svc"; then
+    dc ps || true
+    dc logs --tail=40 "$svc" || true
+    die "service '$svc' is not running after the restart (crashed, or looping).
+    The index was rebuilt and the eval ran; it is the RESTART that failed.
+    Inspect: docker compose logs -f $svc"
+  fi
+done
+info "running: $(printf '%s' "$SERVICES")"
+RESTART_S=$(( $(date +%s) - t0 ))
 
 # ---------------------------------------------------------------------------
 # 7. Compare and report.
@@ -352,8 +373,14 @@ compare_args=(--after "$c_after" --max-churn "$MAX_CHURN"
               --title "Weekly maintenance on $(hostname)")
 [[ -f "$BEFORE_JSON" ]] && compare_args+=(--before "$c_before")
 
+# stderr goes to a FILE, not into the captured output. `docker compose run`
+# writes its progress there ("Container ... Creating"), and with 2>&1 those two
+# lines landed at the top of every report — in the Mattermost post and the ntfy
+# push, above the headline. Keep them for diagnosis, out of the message.
+COMPARE_ERR="$MAINT_DIR/compare-$STAMP.err"
 set +e
-COMPARISON="$(dc run --rm -T web python -m scripts.eval_compare "${compare_args[@]}" 2>&1)"
+COMPARISON="$(dc run --rm -T web python -m scripts.eval_compare "${compare_args[@]}" \
+              2>"$COMPARE_ERR")"
 VERDICT=$?
 set -e
 
@@ -361,12 +388,14 @@ set -e
 # report, missing file) — NOT that the index is fine. An empty section here
 # would read as "nothing to say", which is the opposite of the truth.
 if (( VERDICT == 1 )); then
+  # Here the stderr IS the diagnosis, so fold it in — docker noise and all.
   COMPARISON="**Weekly maintenance on $(hostname) — ⚠️ could not judge the result**
 
 The reindex completed, but comparing the evals failed:
 
 \`\`\`
 $COMPARISON
+$(tail -5 "$COMPARE_ERR" 2>/dev/null)
 \`\`\`
 Check \`$AFTER_JSON\` by hand."
   VERDICT=2

@@ -390,6 +390,18 @@ cross-encoder scores, which are unbounded and drift slightly with any corpus
 change; treating every wobble as critical trains you to ignore the alert.
 Recall is a statement about whether the right document is reachable at all.
 
+**Score distributions jitter, and nothing branches on them.** Expect the OOD
+minimum to move between runs on a loaded host — two prod evals bracketing a
+reindex that changed nothing differed by 0.8 there while every count, every
+in-domain distribution and the OOD median and max stayed identical. The index
+is not the cause: a no-op reindex leaves the HNSW binaries byte-identical (only
+`chroma.sqlite3` changes, from opening the collection for write), and four
+consecutive evals on an idle machine agree on every field. It is float
+non-determinism, visible first on off-topic queries because they sit in a flat
+low-similarity region where candidate ordering is fragile — and at roughly -6
+against a gate threshold of -0.5 it cannot change an outcome. The numbers are
+in the report to be eyeballed, not alerted on.
+
 ### Notification channels
 
 Every configured channel gets every notification at or above `min_severity` —
