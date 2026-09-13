@@ -60,36 +60,60 @@ html, body {
 }
 /* `dvh` (dynamic viewport height) accounts for Safari's collapsing URL bar
    and bottom toolbar; `vh` would push the footer past the visible area. */
-body { display: flex; flex-direction: column; min-height: 100dvh; }
+/* App shell. The page itself does not scroll; the transcript does. Before
+   this, a 900px viewport overflowed by 158px AND #messages had its own
+   scrollbar, so there were two scroll contexts and the composer sat 40px below
+   the fold. Released again below 768px — see the media query at the end. */
+body { display: flex; flex-direction: column; height: 100dvh; overflow: hidden; }
 button, input, textarea, select { font-family: inherit; }
 /* 1fr / auto / 1fr keeps the side columns equal width, so the brand
    cluster (logos + title) lands at the page midpoint while the lang
    switch hugs the right edge. The brand explicitly takes column 2 and
    the lang switch column 3; column 1 is left empty as a spacer to
    match column 3's width. */
-header { padding: 24px 32px 0; display: grid; grid-template-columns: 1fr auto 1fr; align-items: center; column-gap: 14px; }
-.brand { grid-column: 2; display: flex; align-items: center; gap: 14px; }
-.brand-text { text-align: center; min-width: 0; }
-.brand-text h1 { margin: 0; }
-.brand-text .tagline { margin: 4px 0 0; }
+/* Two rows: the brand cluster and the language switch share row 1, the tagline
+   spans row 2. Having the tagline outside .brand is what lets the mobile
+   breakpoint put logo | title | SV/EN on one line with the description
+   beneath, instead of squeezing all three into a centre column. */
+header {
+  padding: 16px 32px 0;
+  display: grid;
+  grid-template-columns: 1fr auto 1fr;
+  align-items: center;
+  column-gap: 14px;
+  row-gap: 2px;
+}
+.brand { grid-column: 2; grid-row: 1; display: flex; align-items: center; gap: 14px; min-width: 0; }
+header > .tagline { grid-column: 1 / -1; grid-row: 2; text-align: center; margin: 0; }
 .brand-link { text-decoration: none; color: inherit; display: block; }
 .brand-link h1 { color: var(--kth-blue); transition: color 120ms ease; }
 .brand-link:hover h1,
 .brand-link:focus-visible h1 { color: var(--kth-skyblue); }
-.logo { height: 56px; width: auto; flex-shrink: 0; display: block; }
+.logo { height: 48px; width: auto; flex-shrink: 0; display: block; }
 /* An optional deployment logo (web.branding_logo), sized a touch larger than
    the KTH mark: the one this was built for — FrakturF2020.svg — has a square
    viewBox with whitespace around the glyph, so matching heights makes it read
    as smaller. */
-.logo-branding { height: 62px; }
-.lang-switch { grid-column: 3; justify-self: end; display: flex; gap: 4px; flex-shrink: 0; }
+.logo-branding { height: 54px; }
+.lang-switch { grid-column: 3; grid-row: 1; justify-self: end; display: flex; gap: 4px; flex-shrink: 0; }
 .lang-switch button { background: transparent; color: var(--muted); border: 1px solid var(--border); border-radius: 4px; padding: 3px 9px; font-size: 12px; font-weight: 600; letter-spacing: 0.04em; cursor: pointer; }
 .lang-switch button:hover:not(.active) { color: var(--fg); border-color: var(--muted); }
 .lang-switch button.active { background: var(--accent); color: var(--accent-fg); border-color: var(--accent); }
 header h1 { margin: 0; font-size: 22px; }
 .tagline { color: var(--muted); margin: 4px 0 0; }
-main { flex: 1; padding: 24px 32px; max-width: 880px; width: 100%; margin: 0 auto; }
-footer { padding: 16px 32px; color: var(--muted); font-size: 13px; border-top: 1px solid var(--border); }
+/* `min-height: 0` on every link in the flex chain, or the children refuse to
+   shrink below their content height and the overflow escapes the shell. */
+main {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+  padding: 16px 32px;
+  max-width: 880px;
+  width: 100%;
+  margin: 0 auto;
+}
+footer { padding: 12px 32px; color: var(--muted); font-size: 13px; border-top: 1px solid var(--border); }
 footer a { color: var(--muted); margin-right: 8px; }
 .card { background: var(--card); border: 1px solid var(--border); border-radius: 8px; padding: 24px; margin-bottom: 16px; }
 .card h2 { margin-top: 0; }
@@ -148,7 +172,7 @@ button:disabled { opacity: 0.5; cursor: progress; }
   overflow-wrap: anywhere;
 }
 .status { color: var(--muted); flex: 1; font-size: 13px; }
-#chat { display: flex; flex-direction: column; gap: 16px; }
+#chat { display: flex; flex-direction: column; gap: 16px; flex: 1; min-height: 0; margin-bottom: 0; }
 /* Per-chat options (logging + learn-more) stacked under the composer's
    submit/reset/export buttons. Both are checkboxes with positive polarity
    — ticked = feature enabled — so they read consistently next to each
@@ -173,7 +197,18 @@ button:disabled { opacity: 0.5; cursor: progress; }
   cursor: help;
 }
 .chat-option input { margin: 0; cursor: pointer; }
-#messages { display: flex; flex-direction: column; gap: 12px; max-height: 60dvh; overflow-y: auto; padding-right: 4px; }
+/* The one scrolling region. `max-height` is gone: the shell gives it exactly
+   the space left over, so it can neither overflow the page nor leave the
+   composer stranded below the fold. */
+#messages {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+  padding-right: 4px;
+}
 .msg { padding: 12px 14px; border-radius: 8px; max-width: 88%; }
 .msg.user { background: var(--user); align-self: flex-end; }
 .msg.bot { background: var(--bot); align-self: flex-start; white-space: pre-wrap; }
@@ -480,6 +515,22 @@ body.viewing-debug main {
   min-width: 1000px;
 }
 
+/* The debug view is long-form reading, not a transcript with a fixed input, so
+   it scrolls as a panel rather than pinning anything. Without its own
+   `overflow-y` it would simply be clipped by the shell. */
+body.viewing-debug #debug-panel {
+  flex: 1;
+  min-height: 0;
+  overflow-y: auto;
+}
+
+/* The retrieval table has a 1000px floor and used to rely on a horizontal PAGE
+   scrollbar on narrower windows. `overflow: hidden` on body removed that, which
+   would silently clip the right-hand columns instead. The scroll has to live on
+   `body`: `main` IS the 1000px element, so giving *it* overflow-x does nothing
+   — its own content fits. Vertical stays hidden, so the shell still holds. */
+body.viewing-debug { overflow-x: auto; }
+
 /* --- Learn-more debug panel (#45 / #19) --- */
 
 #debug-panel {
@@ -745,3 +796,57 @@ body.viewing-debug main {
   opacity: 0.8;
 }
 .stats-inspector-error { color: var(--kth-darkbrick); }
+
+
+/* ---------------------------------------------------------------------------
+   Narrow viewports.
+   Until now this stylesheet had NO media queries at all, so phones were served
+   the desktop `1fr auto 1fr` header grid: the brand cluster was squeezed into
+   a centre column barely wider than the logo, and the title and tagline wrapped
+   one or two words per line. That header alone ate roughly a third of the
+   screen before any content.
+   --------------------------------------------------------------------------- */
+@media (max-width: 767px) {
+  /* Row 1: logo, title, SV/EN. Row 2: the description, full width. */
+  header {
+    grid-template-columns: auto 1fr auto;
+    padding: 10px 16px 0;
+    column-gap: 10px;
+  }
+  .brand { grid-column: 1 / 3; gap: 10px; }
+  .lang-switch { grid-column: 3; }
+  header > .tagline { text-align: left; }
+
+  header h1 { font-size: 19px; line-height: 1.2; }
+  .logo { height: 40px; }
+  .logo-branding { height: 44px; }
+  .tagline { font-size: 13px; }
+
+  main { padding: 12px 16px; }
+  .card { padding: 16px; border-radius: 6px; }
+  footer { padding: 12px 16px; }
+
+  /* Release the viewport lock. A phone keyboard resizes the viewport under the
+     page, and pinning a composer against that is unreliable across browsers —
+     so the page scrolls normally and the composer sticks to the bottom
+     instead, which gets the same "always reachable" result without fighting
+     the keyboard. */
+  body { height: auto; min-height: 100dvh; overflow: visible; }
+  main { display: block; }
+  #chat { display: block; }
+  #messages { max-height: none; overflow-y: visible; }
+  #composer {
+    position: sticky;
+    bottom: 0;
+    background: var(--card);
+    padding-top: 8px;
+    margin-top: 12px;
+    box-shadow: 0 -8px 12px -8px rgb(0 0 0 / 18%);
+  }
+  body.viewing-debug main { min-width: 0; max-width: 100%; }
+  body.viewing-debug #debug-panel { overflow-y: visible; }
+
+  /* Stack the composer controls; side by side they wrap raggedly at this width. */
+  .composer-row { flex-direction: column; align-items: stretch; gap: 8px; }
+  .composer-actions { justify-content: flex-end; }
+}
