@@ -17,8 +17,11 @@ jobs:
         with:
           enable-cache: true
 
+      # --locked: fail if uv.lock is out of date with pyproject.toml rather
+      # than silently re-resolving. Without it CI can pass against versions that
+      # were never committed, which is half of how #87 went unnoticed.
       - name: Sync dependencies (with dev extra)
-        run: uv sync --extra dev
+        run: uv sync --locked --extra dev
 
       # Use the ruff pinned in uv.lock (not the latest release) so CI and local
       # `uv run ruff` agree. `uv tool run ruff` pulled whatever was newest and
@@ -28,6 +31,39 @@ jobs:
 
       - name: Ruff format (check)
         run: uv run ruff format --check .
+
+  lockfile:
+    name: Lockfile guard
+    runs-on: ubuntu-latest
+    # Only meaningful against a base branch; a push to main has nothing to
+    # compare against.
+    if: github.event_name == 'pull_request'
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          # Need the base branch's uv.lock, so fetch enough history to read it.
+          fetch-depth: 0
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v10.0.1
+        with:
+          enable-cache: true
+
+      - name: Sync dependencies (with dev extra)
+        run: uv sync --locked --extra dev
+
+      # PR #87 shipped four silent downgrades: one wrong digit in a version
+      # ceiling walked chromadb, tokenizers, transformers and huggingface-hub
+      # back about a year, and the lock kept them long after the ceiling was
+      # fixed. `uv lock` does not undo that on its own — the old version still
+      # satisfies the corrected range, so uv keeps it as a preference.
+      - name: Extract base uv.lock
+        run: git show "origin/${{ github.base_ref }}:uv.lock" > /tmp/base-uv.lock
+
+      - name: Check for dependency downgrades
+        env:
+          PR_BODY: ${{ github.event.pull_request.body }}
+        run: uv run python -m scripts.check_lock_downgrades --base /tmp/base-uv.lock
 
   build:
     name: Tests + build (Python ${{ matrix.python-version }})
@@ -48,8 +84,11 @@ jobs:
         run: uv python install ${{ matrix.python-version }}
 
       # pyproject.toml pins torch to the CPU-only index for Linux; no extra env needed.
+      # --locked: fail if uv.lock is out of date with pyproject.toml rather
+      # than silently re-resolving. Without it CI can pass against versions that
+      # were never committed, which is half of how #87 went unnoticed.
       - name: Sync dependencies (with dev extra)
-        run: uv sync --extra dev
+        run: uv sync --locked --extra dev
 
       # Imports the full package via the CLI entry point — fails fast on any
       # ImportError without needing the corpus, Chroma index, or Ollama.
