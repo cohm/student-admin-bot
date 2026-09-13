@@ -79,7 +79,7 @@ _AMBIGUOUS_PROGRAM_CODES = frozenset({"MEDIA", "TIMES"})
 _PROGRAM_CODE_RE = re.compile(r"\b[A-Za-z]{5}\b")
 
 
-def _resolve_program_codes(cfg: Config, text: str) -> dict[str, str]:
+def _resolve_program_codes(cfg: Config, text: str, lang: str | None = None) -> dict[str, str]:
     """Map programme codes appearing in `text` to their official long names.
 
     Matching is case-insensitive: students type "ctfys" about as often as
@@ -89,8 +89,19 @@ def _resolve_program_codes(cfg: Config, text: str) -> dict[str, str]:
     five-letter word cannot be mistaken for a code — except for the few that
     genuinely are words (see `_AMBIGUOUS_PROGRAM_CODES`).
 
-    Returns {CODE: official long name}. The longest alias is the official
-    name; the shorter ones are nicknames and the code itself.
+    Returns {CODE: official long name}, in `lang` when both exist.
+
+    The alias table holds a Swedish and an English name per programme, and
+    without `lang` the longest wins — which is a coin flip between them: CTFYS
+    comes back Swedish, TTFYM English.
+
+    PASS `lang` FOR THE PROMPT GLOSSARY, NOT FOR THE RETRIEVAL QUERY. The
+    glossary is read by the model and should match the conversation. The query
+    is matched against a corpus that is 127 Swedish files to 59 English, and
+    the programme-director pages are Swedish — so expanding "Who is the
+    programme director for CFATE?" with the *English* name moved it away from
+    the only document that answers it, and cost a recall point. Measured, not
+    assumed: recall@5 went 44/45 -> 43/45 when this was applied to both.
     """
     if not text:
         return {}
@@ -110,14 +121,45 @@ def _resolve_program_codes(cfg: Config, text: str) -> dict[str, str]:
         for tok in tokens
         if not (tok.upper() in _AMBIGUOUS_PROGRAM_CODES and tok != tok.upper())
     }
-    code_to_name: dict[str, str] = {}
+    by_code: dict[str, list[str]] = {}
     for alias, code in aliases.items():
         code_upper = str(code).upper()
         if code_upper not in wanted or alias.upper() == code_upper:
             continue
-        if len(alias) > len(code_to_name.get(code_upper, "")):
-            code_to_name[code_upper] = alias
+        by_code.setdefault(code_upper, []).append(alias)
+
+    code_to_name: dict[str, str] = {}
+    for code_upper, names in by_code.items():
+        preferred = [n for n in names if _alias_language(n) == lang] if lang else []
+        # Longest within the preferred language, else longest overall — the
+        # short entries are nicknames, not the official name.
+        code_to_name[code_upper] = max(preferred or names, key=len)
     return code_to_name
+
+
+# Swedish programme names carry å/ä/ö or one of these stems; the English ones
+# read "degree programme in ...", "master's programme, ...". Cheap and specific
+# enough for this table, which is scraped from one KTH page in two languages.
+_SV_ALIAS_RE = re.compile(
+    r"[åäö]|\b(?:civilingenj|masterprogram|kandidatprogram|h\wgskoleingenj|"
+    r"arkitektutbildning|utbildning|program i)\b",
+    re.IGNORECASE,
+)
+_EN_ALIAS_RE = re.compile(
+    r"\b(?:degree|programme|program|master's|bachelor's|engineering|studies)\b",
+    re.IGNORECASE,
+)
+
+
+def _alias_language(alias: str) -> str | None:
+    """ "sv", "en", or None when the alias gives no clear signal."""
+    sv = bool(_SV_ALIAS_RE.search(alias))
+    en = bool(_EN_ALIAS_RE.search(alias))
+    if sv and not en:
+        return "sv"
+    if en and not sv:
+        return "en"
+    return None
 
 
 def _expand_program_codes(text: str, code_to_name: dict[str, str]) -> str:
@@ -139,6 +181,26 @@ def _expand_program_codes(text: str, code_to_name: dict[str, str]) -> str:
         return f"{m.group(0)} ({name.strip().capitalize()})"
 
     return _PROGRAM_CODE_RE.sub(repl, text)
+
+
+def _glossary_with_codes(glossary_md: str, lang: str, code_to_name: dict[str, str]) -> str:
+    """Append `- CODE = Official name` lines to the prompt glossary.
+
+    Shared by both directions: codes the student typed, and the code the
+    dynamic-web router resolved from a programme's name. Returns the glossary
+    unchanged when there is nothing to add.
+    """
+    entries = [
+        f"- {code} = {name.strip().capitalize()}"
+        for code, name in code_to_name.items()
+        if name.strip()
+    ]
+    if not entries:
+        return glossary_md
+    label = "Ordlista" if lang == "sv" else "Glossary"
+    if not glossary_md:
+        return f"{label}:\n" + "\n".join(entries)
+    return glossary_md + "\n" + "\n".join(entries)
 
 
 def build_retrieval_query(
@@ -698,19 +760,13 @@ def answer(
         jargon_note = jargon.transparency_note(jargon_hits, lang)
 
     # Codes resolved above also go into the prompt glossary, so the model can
-    # name the programme it is answering about.
-    if code_to_name:
-        dynamic_entries = [
-            f"- {code} = {name.strip().capitalize()}"
-            for code, name in code_to_name.items()
-            if name.strip()
-        ]
-        if dynamic_entries:
-            label = "Ordlista" if lang == "sv" else "Glossary"
-            if not glossary_md:
-                glossary_md = f"{label}:\n" + "\n".join(dynamic_entries)
-            else:
-                glossary_md += "\n" + "\n".join(dynamic_entries)
+    # name the programme it is answering about. Resolved again with `lang`:
+    # the glossary should name the programme in the conversation's language,
+    # while the retrieval query deliberately does not — see
+    # `_resolve_program_codes`.
+    glossary_md = _glossary_with_codes(
+        glossary_md, lang, _resolve_program_codes(cfg, contextual_q, lang)
+    )
 
     web_result = maybe_fetch_dynamic_web(
         cfg,
@@ -721,6 +777,20 @@ def answer(
         admission_year_prefix_prior=admission_year_prefix_prior,
     )
     resolved_program_code = web_result.resolved_program_code if web_result else None
+
+    # A question can name a programme without ever typing its code — "vad har
+    # masterprogrammet i teknisk fysik för programkod?". The router resolves
+    # that to TTFYM in order to pick a URL, but until now the code went no
+    # further than the URL: the model received the fetched page and the links,
+    # never the code itself, so it answered that the information was not in the
+    # context. It was not — it was in the router. See issue #85.
+    #
+    # `code_to_name` above only covers codes present in the question text, so
+    # this is the reverse direction and has to run after the fetch.
+    if resolved_program_code and resolved_program_code.upper() not in code_to_name:
+        glossary_md = _glossary_with_codes(
+            glossary_md, lang, _resolve_program_codes(cfg, resolved_program_code.upper(), lang)
+        )
     applied_admission_term = web_result.applied_admission_term if web_result else None
     applied_admission_year_prefix = web_result.applied_admission_year_prefix if web_result else None
     source_urls: list[str] = []
