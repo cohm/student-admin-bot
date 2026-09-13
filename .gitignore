@@ -22,7 +22,6 @@ data/*.sqlite-*
 data/*.sqlite3
 data/web_users
 data/course_code_pattern_audit.json
-data/host_metrics.json
 data/url_source_map.json
 data/url_filtered_links_report.json
 data/program_aliases.json
