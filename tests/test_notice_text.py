@@ -24,7 +24,13 @@ INDEX = (STATIC / "index.html").read_text(encoding="utf-8")
 
 @pytest.fixture
 def cfg():
-    return get_config().model_copy(deep=True)
+    c = get_config().model_copy(deep=True)
+    # Pin the ambient bits this module does not care about. get_config() is
+    # lru_cached and other modules set WEB_AUTH_ENABLED before clearing it, so
+    # inheriting whatever is cached makes these tests order-dependent — they
+    # passed alone and failed in the suite.
+    c.web.auth_enabled = False
+    return c
 
 
 def test_local_model_gets_the_hardware_sentence(cfg):
@@ -69,7 +75,7 @@ def test_the_same_signal_drives_the_notice_and_the_cloud_banner():
     """If these ever diverged, the page could claim local while warning about
     a cloud provider in the next breath."""
     js = (STATIC / "app.js").read_text(encoding="utf-8")
-    block = js[js.index("cloudProviderName = data.cloud_provider_name"):]
+    block = js[js.index("cloudProviderName = data.cloud_provider_name") :]
     head = block[: block.index("}")]
     assert "applyCloudProviderNotice" in head
     assert "applyLocalModelSentence" in head
@@ -80,12 +86,19 @@ def test_strings_exist_in_both_languages(key):
     assert I18N.count(f'"{key}"') == 2, key
 
 
-@pytest.mark.parametrize("claim", [
-    "begränsade resurser", "språkmodellen är liten", "svar kan vara långsamma",
-    "Första frågan kan ta extra lång tid",
-    "limited resources", "the language model is small", "responses may be slow",
-    "The first question can take noticeably longer",
-])
+@pytest.mark.parametrize(
+    "claim",
+    [
+        "begränsade resurser",
+        "språkmodellen är liten",
+        "svar kan vara långsamma",
+        "Första frågan kan ta extra lång tid",
+        "limited resources",
+        "the language model is small",
+        "responses may be slow",
+        "The first question can take noticeably longer",
+    ],
+)
 def test_retired_claims_are_gone(claim):
     """All obsolete since the gateway move and gemma4-26b-a4b."""
     assert claim not in I18N
