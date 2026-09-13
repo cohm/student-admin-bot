@@ -52,7 +52,6 @@ def main(build: bool, dev: bool) -> None:
 
     if perf_on:
         click.echo("Performance panel is enabled. Start host metrics collector:")
-        click.echo("uv run student-bot-host-metrics")
 
 
 if __name__ == "__main__":

@@ -133,9 +133,6 @@ class _RedactAccessTokenAccessLog(logging.Filter):
 
 WEB_PKG_DIR = Path(__file__).resolve().parent
 STATIC_DIR = WEB_PKG_DIR / "static"
-HOST_METRICS_FILE = Path("data/host_metrics.json")
-HOST_METRICS_START_CMD = "uv run student-bot-host-metrics"
-HOST_METRICS_STOP_CMD = "pkill -f student-bot-host-metrics"
 
 
 def _perf_panel_enabled(cfg: Config) -> bool:
@@ -407,23 +404,8 @@ def create_app(cfg: Config | None = None) -> FastAPI:
             return {"performance_panel_enabled": False}
         return {
             "performance_panel_enabled": True,
-            "system_load": _system_load_snapshot(),
-            "host_system_load": _host_load_snapshot(cfg),
+            "server_load": _server_load_snapshot(),
         }
-
-    @app.on_event("startup")
-    def startup_notice():
-        if not _perf_panel_enabled(cfg):
-            return
-        log.info("performance panel enabled; start host metrics collector on host.")
-        log.info("command: %s", HOST_METRICS_START_CMD)
-
-    @app.on_event("shutdown")
-    def shutdown_notice():
-        if not _perf_panel_enabled(cfg):
-            return
-        log.info("web app stopping; stop host metrics collector if still running.")
-        log.info("command: %s", HOST_METRICS_STOP_CMD)
 
     @app.post(_join_base(base_path, "/api/session"))
     def session_set(request: Request, payload: SessionRequest):
@@ -799,8 +781,15 @@ def _stream_answer(
                     "gen_tokens_est": result.gen_tokens_est,
                     "ttft_ms": result.ttft_ms,
                     "gen_tps": result.gen_tps,
-                    "system_load": _system_load_snapshot(),
-                    "host_system_load": _host_load_snapshot(cfg),
+                    "server_load": _server_load_snapshot(),
+                    # Where each part of the latency actually went. This
+                    # machine does retrieval and reranking; generation happens
+                    # on the LLM gateway, which is why one set of CPU numbers
+                    # explains so little on its own.
+                    "chroma_ms": result.chroma_ms,
+                    "rerank_ms": result.rerank_ms,
+                    "llm_ms": result.llm_ms,
+                    "llm_model": _active_model_label(cfg),
                 }
             )
         # Inline the debug payload only when learn_more was on AND it was
@@ -858,7 +847,31 @@ def _gpu_load_snapshot() -> dict[str, float] | None:
         return None
 
 
-def _system_load_snapshot() -> dict:
+def _active_model_label(cfg: Config) -> str:
+    """Model id plus the provider hosting it, e.g. "gemma4-26b-a4b · litellm".
+
+    Deliberately not the base URL: that is an internal tailnet address and has
+    no business in a page served to students. A misconfigured registry must not
+    break the panel, so this degrades to "" rather than raising.
+    """
+    try:
+        resolved = cfg.active_model()
+    except RuntimeError:
+        return ""
+    name = resolved.display_name or resolved.provider_key
+    return f"{resolved.model_id} · {name}" if name else resolved.model_id
+
+
+def _server_load_snapshot() -> dict:
+    """CPU and RAM for the machine serving this request.
+
+    There used to be a second set of numbers here, read from a JSON file
+    written by a collector running on the Docker *host* — from when the app,
+    the container and the model all shared one Mac mini. On the VM nothing
+    writes that file, so the "Host" column was permanently "–", and it measured
+    the wrong box regardless: generation runs on the LLM gateway now, and this
+    machine only does retrieval and reranking. See issue #74.
+    """
     now = int(time.time() * 1000)
     cpu_pct: float | None = None
     mem_pct: float | None = None
@@ -890,28 +903,6 @@ def _system_load_snapshot() -> dict:
         "mem_pct": mem_pct,
         "gpu": _gpu_load_snapshot(),
     }
-
-
-def _host_load_snapshot(cfg: Config) -> dict | None:
-    path = cfg.absolute(HOST_METRICS_FILE)
-    if not path.exists():
-        return None
-    try:
-        data = json.loads(path.read_text(encoding="utf-8"))
-        if not isinstance(data, dict):
-            return None
-        ts = int(data.get("ts_ms", 0))
-        # Ignore stale host samples (>10s old).
-        if ts and int(time.time() * 1000) - ts > 10_000:
-            return None
-        return {
-            "ts_ms": ts,
-            "cpu_pct": data.get("cpu_pct"),
-            "mem_pct": data.get("mem_pct"),
-            "gpu": data.get("gpu"),
-        }
-    except Exception:
-        return None
 
 
 # --- about + stats pages (server-rendered) ---
@@ -978,7 +969,7 @@ _HEADER_HTML = """\
 # Loaded into <head> on every server-rendered page, before notice.js, so
 # data-i18n attributes are translated before any other scripts run.
 _NOTICE_SCRIPT = (
-    '<script src="{static_prefix}/i18n.js?v=39"></script>'
+    '<script src="{static_prefix}/i18n.js?v=40"></script>'
     '<script src="{static_prefix}/notice.js?v=33" defer></script>'
 )
 
@@ -1016,7 +1007,7 @@ def _about_page(cfg: Config, base_path: str = "") -> HTMLResponse:
     )
     body = f"""
 <!doctype html><html lang="sv"><head><meta charset="utf-8"><title>student-bot</title>
-<link rel="stylesheet" href="{static_prefix}/style.css?v=39">{_FAVICON_LINKS.format(static_prefix=static_prefix)}{_NOTICE_SCRIPT.format(static_prefix=static_prefix)}</head>
+<link rel="stylesheet" href="{static_prefix}/style.css?v=40">{_FAVICON_LINKS.format(static_prefix=static_prefix)}{_NOTICE_SCRIPT.format(static_prefix=static_prefix)}</head>
 <body>{_HEADER_HTML.format(tagline_html="", static_prefix=static_prefix, home=home, branding_html=_branding_logo_html(cfg, static_prefix))}<main>{_NOTICE_HTML}<div class="card">
 <h2 data-i18n="about.h2.what"></h2>
 <p data-i18n="about.what.body"></p>
@@ -1060,7 +1051,7 @@ def _glossary_page(cfg: Config, base_path: str = "") -> HTMLResponse:
     )
     body = f"""
 <!doctype html><html lang="sv"><head><meta charset="utf-8"><title>student-bot</title>
-<link rel="stylesheet" href="{static_prefix}/style.css?v=39">{_FAVICON_LINKS.format(static_prefix=static_prefix)}{_NOTICE_SCRIPT.format(static_prefix=static_prefix)}</head>
+<link rel="stylesheet" href="{static_prefix}/style.css?v=40">{_FAVICON_LINKS.format(static_prefix=static_prefix)}{_NOTICE_SCRIPT.format(static_prefix=static_prefix)}</head>
 <body>{_HEADER_HTML.format(tagline_html='<p class="tagline" data-i18n="glossary.tagline"></p>', static_prefix=static_prefix, home=home, branding_html=_branding_logo_html(cfg, static_prefix))}
 <main>{_NOTICE_HTML}<div class="card">
 <table border="1" cellpadding="6" cellspacing="0" style="width:100%; border-collapse: collapse;">
@@ -1171,7 +1162,7 @@ def _md_doc_page(cfg: Config, docs_dir: Path, rel_source: str, base_path: str = 
 
     body = f"""
 <!doctype html><html lang="sv"><head><meta charset="utf-8"><title>{_h(doc.title)}</title>
-<link rel="stylesheet" href="{static_prefix}/style.css?v=39">{_FAVICON_LINKS.format(static_prefix=static_prefix)}{_NOTICE_SCRIPT.format(static_prefix=static_prefix)}</head>
+<link rel="stylesheet" href="{static_prefix}/style.css?v=40">{_FAVICON_LINKS.format(static_prefix=static_prefix)}{_NOTICE_SCRIPT.format(static_prefix=static_prefix)}</head>
 <body>{_HEADER_HTML.format(tagline_html="", static_prefix=static_prefix, home=home, branding_html=_branding_logo_html(cfg, static_prefix))}
 <main><div class="card md-doc">
 <nav class="md-nav">
@@ -1458,7 +1449,7 @@ def _stats_page(
 
     body = f"""
 <!doctype html><html lang="sv"><head><meta charset="utf-8"><title>student-bot</title>
-<link rel="stylesheet" href="{static_prefix}/style.css?v=39">{_FAVICON_LINKS.format(static_prefix=static_prefix)}{_NOTICE_SCRIPT.format(static_prefix=static_prefix)}</head>
+<link rel="stylesheet" href="{static_prefix}/style.css?v=40">{_FAVICON_LINKS.format(static_prefix=static_prefix)}{_NOTICE_SCRIPT.format(static_prefix=static_prefix)}</head>
 <body>{_HEADER_HTML.format(tagline_html="", static_prefix=static_prefix, home=home, branding_html=_branding_logo_html(cfg, static_prefix))}<main>{_NOTICE_HTML}<div class="card stats-card" data-channel="{channel}" data-is-admin="{1 if is_admin else 0}">
 <h1 data-i18n="stats.title"></h1>
 {channel_switch_html}

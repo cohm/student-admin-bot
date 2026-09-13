@@ -4,7 +4,7 @@
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <title>student-bot</title>
-<link rel="stylesheet" href="static/style.css?v=39">
+<link rel="stylesheet" href="static/style.css?v=40">
 <link rel="icon" href="static/favicon.svg?v=1" type="image/svg+xml">
 <link rel="icon" href="static/favicon-32.png?v=1" sizes="32x32" type="image/png">
 <link rel="apple-touch-icon" href="static/apple-touch-icon.png?v=1">
@@ -67,21 +67,7 @@
     <form id="composer">
       <textarea id="question" rows="3" data-i18n-placeholder="chat.placeholder" required></textarea>
       <div class="composer-row">
-        <div id="perf-panel" class="perf-panel hidden" aria-live="polite">
-          <div class="perf-line">
-            <span class="perf-label" data-i18n="perf.context" data-i18n-title="perf.tip.context"></span>
-            <span id="perf-context" class="perf-value">–</span>
-          </div>
-          <div class="perf-line">
-            <span class="perf-label" data-i18n="perf.tokens" data-i18n-title="perf.tip.tokens"></span>
-            <span id="perf-tokens" class="perf-value">–</span>
-          </div>
-          <div class="perf-line">
-            <span class="perf-label" data-i18n="perf.system" data-i18n-title="perf.tip.system"></span>
-            <span id="perf-system" class="perf-value">–</span>
-          </div>
-          <span id="status" class="status"></span>
-        </div>
+        <span id="status" class="status"></span>
         <div class="composer-actions-col">
           <div class="composer-actions">
             <button type="button" id="export" class="ghost" hidden
@@ -98,10 +84,32 @@
               <input id="learn-more-chat" type="checkbox">
               <span data-i18n="chat.learnmore.label"></span>
             </label>
+            <label class="chat-option hidden" id="perf-toggle-wrap" data-i18n-title="perf.toggle.tip">
+              <input id="perf-toggle" type="checkbox">
+              <span data-i18n="perf.toggle.label"></span>
+            </label>
           </div>
         </div>
       </div>
     </form>
+
+    <!-- Resource panel (#74). Below the composer rather than inside it: in the
+         composer row it cost 67px of vertical space on every visit, whether or
+         not anyone was reading it. Hidden until the checkbox above is ticked. -->
+    <div id="perf-panel" class="perf-panel hidden" aria-live="polite">
+      <div class="perf-group">
+        <span class="perf-label" data-i18n="perf.context" data-i18n-title="perf.tip.context"></span>
+        <span id="perf-context" class="perf-value">–</span>
+      </div>
+      <div class="perf-group">
+        <span class="perf-label" data-i18n="perf.server" data-i18n-title="perf.tip.server"></span>
+        <span id="perf-server" class="perf-value">–</span>
+      </div>
+      <div class="perf-group">
+        <span class="perf-label" data-i18n="perf.model" data-i18n-title="perf.tip.model"></span>
+        <span id="perf-model" class="perf-value">–</span>
+      </div>
+    </div>
   </section>
 
   <aside id="debug-panel" class="card" aria-live="polite">
@@ -122,8 +130,8 @@
   <span id="conn"></span>
 </footer>
 
-<script src="static/i18n.js?v=39"></script>
+<script src="static/i18n.js?v=40"></script>
 <script src="static/notice.js?v=32" defer></script>
-<script src="static/app.js?v=38"></script>
+<script src="static/app.js?v=39"></script>
 </body>
 </html>

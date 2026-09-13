@@ -28,10 +28,12 @@ const composer = el("#composer");
 const statusEl = el("#status");
 const connEl = el("#conn");
 const perfContextEl = el("#perf-context");
-const perfTokensEl = el("#perf-tokens");
-const perfSystemEl = el("#perf-system");
+const perfServerEl = el("#perf-server");
+const perfModelEl = el("#perf-model");
 const perfPanelEl = el("#perf-panel");
-let perfEnabled = false;
+const perfToggleEl = el("#perf-toggle");
+let perfEnabled = false;   // deployment allows it AND the reader wants it
+let perfAvailable = false; // deployment allows it
 
 function botDisplayName() {
   const full = ((window.t && window.t("brand.name")) || "Lux").trim();
@@ -281,7 +283,7 @@ composer.addEventListener("submit", async (e) => {
 
   if (finalMeta) {
     if (Object.prototype.hasOwnProperty.call(finalMeta, "performance_panel_enabled")) {
-      setPerfEnabled(!!finalMeta.performance_panel_enabled);
+      setPerfAvailable(!!finalMeta.performance_panel_enabled);
     }
     const rawText = botMsg.entry?.raw || "";
     if (firstTokenAt && rawText) {
@@ -334,10 +336,37 @@ function renderContextNotices(botMsg, meta) {
   botMsg.body.insertBefore(wrap, botMsg.body.firstChild);
 }
 
-function setPerfEnabled(enabled) {
-  perfEnabled = !!enabled;
-  if (!perfPanelEl) return;
-  perfPanelEl.classList.toggle("hidden", !perfEnabled);
+// Two gates (#74). `perfAvailable` is the deployment's choice
+// (web.performance_panel_enabled); `perfShown` is the reader's, remembered per
+// browser. The panel used to appear whenever the deployment allowed it, which
+// meant everybody paid for it and almost nobody wanted it.
+const PERF_PREF_KEY = "perfPanelShown";
+
+function readPerfPref() {
+  try {
+    return localStorage.getItem(PERF_PREF_KEY) === "1";
+  } catch (_) {
+    return false;  // private mode / storage blocked: default to hidden
+  }
+}
+
+function writePerfPref(on) {
+  try {
+    localStorage.setItem(PERF_PREF_KEY, on ? "1" : "0");
+  } catch (_) { /* not worth failing a page load over */ }
+}
+
+function setPerfAvailable(available) {
+  perfAvailable = !!available;
+  const wrap = el("#perf-toggle-wrap");
+  if (wrap) wrap.classList.toggle("hidden", !perfAvailable);
+  if (perfToggleEl) perfToggleEl.checked = perfAvailable && readPerfPref();
+  applyPerfVisibility();
+}
+
+function applyPerfVisibility() {
+  perfEnabled = perfAvailable && !!perfToggleEl?.checked;
+  if (perfPanelEl) perfPanelEl.classList.toggle("hidden", !perfEnabled);
 }
 
 function estimateTokens(text) {
@@ -363,12 +392,15 @@ function updatePerfPanel(meta) {
   const tps = Number.isFinite(meta.gen_tps) ? meta.gen_tps : meta.client_tps;
   const tok = meta.gen_tokens_est;
   const parts = [];
+  if (meta.llm_model) parts.push(meta.llm_model);
   if (Number.isFinite(ttft)) parts.push(`TTFT ${formatDuration(ttft)}`);
   if (Number.isFinite(tps)) parts.push(`${tps.toFixed(1)} tok/s`);
   if (Number.isFinite(tok)) parts.push(`~${tok} tok`);
-  perfTokensEl.textContent = parts.length ? parts.join(" · ") : "–";
+  if (Number.isFinite(meta.llm_ms)) parts.push(`${tt("perf.stage.total")} ${formatDuration(meta.llm_ms)}`);
+  perfModelEl.textContent = parts.length ? parts.join(" · ") : "–";
 
-  applyMergedSystemLoad(meta.system_load, meta.host_system_load);
+  lastStages = { chroma_ms: meta.chroma_ms, rerank_ms: meta.rerank_ms };
+  applyServerLoad(meta.server_load);
 }
 
 function formatDuration(ms) {
@@ -377,17 +409,26 @@ function formatDuration(ms) {
   return `${(ms / 1000).toFixed(1)} s`;
 }
 
-function applyMergedSystemLoad(containerLoad, hostLoad) {
-  if (!perfSystemEl) return;
-  const cCpu = formatPct(containerLoad?.cpu_pct);
-  const hCpu = formatPct(hostLoad?.cpu_pct);
-  const cMem = formatPct(containerLoad?.mem_pct);
-  const hMem = formatPct(hostLoad?.mem_pct);
-  perfSystemEl.innerHTML = (
-    `<span class="host">Host</span> / <span class="cont">Cont.</span> · ` +
-    `CPU: <span class="host">${hCpu}</span> / <span class="cont">${cCpu}</span> · ` +
-    `RAM: <span class="host">${hMem}</span> / <span class="cont">${cMem}</span>`
-  );
+function applyServerLoad(load) {
+  if (!perfServerEl) return;
+  // One machine, named. The old row showed "Host / Cont." with the host half
+  // permanently "–": that collector ran on the Mac mini this used to live on.
+  const parts = [`CPU ${formatPct(load?.cpu_pct)}`, `RAM ${formatPct(load?.mem_pct)}`];
+  if (Number.isFinite(lastStages.chroma_ms)) parts.push(`${tt("perf.stage.search")} ${formatDuration(lastStages.chroma_ms)}`);
+  if (Number.isFinite(lastStages.rerank_ms)) parts.push(`${tt("perf.stage.rank")} ${formatDuration(lastStages.rerank_ms)}`);
+  perfServerEl.textContent = parts.join(" · ");
+}
+
+// Retrieval timings arrive with an answer; CPU/RAM refresh on a timer. Keeping
+// the last ones lets the two update independently without blanking each other.
+let lastStages = {};
+
+// i18n lookup that degrades to the key's last segment if the catalogue has not
+// loaded yet — these labels sit inline in a value string, so a missing one
+// would otherwise render as "undefined 98 ms".
+function tt(key) {
+  const v = window.t && window.t(key);
+  return v && v !== key ? v : key.split(".").pop();
 }
 
 async function refreshSystemLoad() {
@@ -397,10 +438,10 @@ async function refreshSystemLoad() {
     if (!resp.ok) return;
     const data = await resp.json();
     if (Object.prototype.hasOwnProperty.call(data, "performance_panel_enabled")) {
-      setPerfEnabled(!!data.performance_panel_enabled);
+      setPerfAvailable(!!data.performance_panel_enabled);
       if (!perfEnabled) return;
     }
-    applyMergedSystemLoad(data.system_load, data.host_system_load);
+    applyServerLoad(data.server_load);
   } catch (_) { }
 }
 
@@ -457,18 +498,26 @@ async function initPerf() {
     const resp = await fetch("api/health", { credentials: "include" });
     if (!resp.ok) return;
     const data = await resp.json();
-    setPerfEnabled(!!data.performance_panel_enabled);
+    setPerfAvailable(!!data.performance_panel_enabled);
     applyBrandingLogo(data.branding_logo_html);
     cloudProviderName = data.cloud_provider_name || "";
     applyCloudProviderNotice(cloudProviderName);
     state.isAdmin = !!data.is_admin;
     document.body.classList.toggle("is-admin", state.isAdmin);
   } catch (_) {
-    setPerfEnabled(false);
+    setPerfAvailable(false);
   }
 }
 
 document.addEventListener("i18n:langchange", () => applyCloudProviderNotice(cloudProviderName));
+
+perfToggleEl?.addEventListener("change", () => {
+  writePerfPref(perfToggleEl.checked);
+  applyPerfVisibility();
+  // Values only arrive with an answer or on the next poll, so fill the
+  // machine half immediately rather than showing an empty panel.
+  if (perfEnabled) refreshSystemLoad();
+});
 
 initPerf();
 

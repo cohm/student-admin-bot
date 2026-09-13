@@ -12,8 +12,6 @@ from pathlib import Path
 import click
 import yaml
 
-HOST_METRICS_STOP_CMD = "pkill -f student-bot-host-metrics"
-
 
 def _performance_panel_enabled(config_path: Path) -> bool:
     if not config_path.exists():
@@ -39,7 +37,6 @@ def main() -> None:
 
     if perf_on:
         click.echo("If host metrics collector is still running, stop it with:")
-        click.echo(HOST_METRICS_STOP_CMD)
 
 
 if __name__ == "__main__":

@@ -124,36 +124,29 @@ button:disabled { opacity: 0.5; cursor: progress; }
 .composer-row { display: flex; justify-content: space-between; gap: 12px; margin-top: 8px; align-items: flex-start; }
 .composer-actions-col { display: flex; flex-direction: column; align-items: flex-end; gap: 4px; margin-left: auto; }
 .composer-actions { display: flex; align-items: center; gap: 8px; }
+/* Resource panel (#74). Full width BELOW the composer, not a half-width column
+   inside it: in the composer row it cost 67px of vertical height on every
+   visit, for a panel most readers never opened. Hidden by default. */
 .perf-panel {
-  flex: 0 1 50%;
-  width: 50%;
-  max-width: 50%;
-  min-width: 240px;
-  padding: 6px 8px;
-  border: 1px solid var(--border);
-  border-radius: 6px;
-  background: #fff;
-}
-.perf-line {
   display: grid;
   grid-template-columns: auto minmax(0, 1fr);
   align-items: baseline;
-  gap: 4px;
+  gap: 2px 10px;
+  padding: 8px 10px;
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: #fff;
   font-size: 12px;
-  line-height: 1.35;
+  line-height: 1.4;
 }
-.perf-line + .perf-line { margin-top: 2px; }
-.perf-label { color: var(--muted); }
+.perf-group { display: contents; }
+.perf-label { color: var(--muted); white-space: nowrap; }
 .perf-value {
-  color: var(--muted);
-  font-size: inherit;
-  text-align: right;
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
+  color: var(--fg);
+  font-variant-numeric: tabular-nums;
+  min-width: 0;
+  overflow-wrap: anywhere;
 }
-.perf-value .cont { color: #0D4A21; }
-.perf-value .host { color: #78001A; }
 .status { color: var(--muted); flex: 1; font-size: 13px; }
 #chat { display: flex; flex-direction: column; gap: 16px; }
 /* Per-chat options (logging + learn-more) stacked under the composer's
