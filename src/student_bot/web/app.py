@@ -908,13 +908,38 @@ def _server_load_snapshot() -> dict:
 # --- about + stats pages (server-rendered) ---
 
 
-# Shared experimental-service notice. Same markup the chat page uses, so
-# notice.js dismissal state is shared across all pages on this origin.
-# Body text is filled in by i18n.js based on the user's language choice.
-_NOTICE_HTML = """\
+def _model_is_local(cfg: Config) -> bool:
+    """Does generation happen on our own hardware?
+
+    Reuses `discloses_external`, the same flag that drives the cloud privacy
+    banner, so the notice and the banner can never contradict each other: the
+    notice claims "runs on KTH's own hardware" exactly when the banner is
+    staying quiet. A registry that does not resolve is treated as NOT local —
+    claiming local wrongly is the worse error of the two.
+    """
+    try:
+        return not cfg.active_model().discloses_external
+    except RuntimeError:
+        return False
+
+
+def _notice_html(cfg: Config) -> str:
+    """Shared experimental-service notice.
+
+    Same markup the chat page uses, so notice.js dismissal state is shared
+    across every page on this origin. Text is filled in by i18n.js from the
+    reader's language choice.
+
+    The middle sentence — that the model is open and runs here — is emitted
+    only when that is true. With a cloud model configured it disappears, and
+    the separate cloud banner covers that case instead.
+    """
+    local = '<span data-i18n="notice.model.local"></span>' if _model_is_local(cfg) else ""
+    return f"""\
 <div class="notice" role="note">
   <div class="notice-body">
-    <p><strong data-i18n="notice.title"></strong><span data-i18n="notice.body"></span></p>
+    <p><strong data-i18n="notice.title"></strong><span data-i18n="notice.body"></span>\
+{local}<span data-i18n="notice.feedback"></span></p>
   </div>
   <button class="notice-close" type="button" data-i18n-aria="notice.close.aria">×</button>
 </div>
@@ -965,7 +990,7 @@ _HEADER_HTML = """\
 # Loaded into <head> on every server-rendered page, before notice.js, so
 # data-i18n attributes are translated before any other scripts run.
 _NOTICE_SCRIPT = (
-    '<script src="{static_prefix}/i18n.js?v=40"></script>'
+    '<script src="{static_prefix}/i18n.js?v=41"></script>'
     '<script src="{static_prefix}/notice.js?v=33" defer></script>'
 )
 
@@ -1003,8 +1028,8 @@ def _about_page(cfg: Config, base_path: str = "") -> HTMLResponse:
     )
     body = f"""
 <!doctype html><html lang="sv"><head><meta charset="utf-8"><title>student-bot</title>
-<link rel="stylesheet" href="{static_prefix}/style.css?v=41">{_FAVICON_LINKS.format(static_prefix=static_prefix)}{_NOTICE_SCRIPT.format(static_prefix=static_prefix)}</head>
-<body>{_HEADER_HTML.format(tagline_html="", static_prefix=static_prefix, home=home, branding_html=_branding_logo_html(cfg, static_prefix))}<main>{_NOTICE_HTML}<div class="card">
+<link rel="stylesheet" href="{static_prefix}/style.css?v=42">{_FAVICON_LINKS.format(static_prefix=static_prefix)}{_NOTICE_SCRIPT.format(static_prefix=static_prefix)}</head>
+<body>{_HEADER_HTML.format(tagline_html="", static_prefix=static_prefix, home=home, branding_html=_branding_logo_html(cfg, static_prefix))}<main>{_notice_html(cfg)}<div class="card">
 <h2 data-i18n="about.h2.what"></h2>
 <p data-i18n="about.what.body"></p>
 
@@ -1047,9 +1072,9 @@ def _glossary_page(cfg: Config, base_path: str = "") -> HTMLResponse:
     )
     body = f"""
 <!doctype html><html lang="sv"><head><meta charset="utf-8"><title>student-bot</title>
-<link rel="stylesheet" href="{static_prefix}/style.css?v=41">{_FAVICON_LINKS.format(static_prefix=static_prefix)}{_NOTICE_SCRIPT.format(static_prefix=static_prefix)}</head>
+<link rel="stylesheet" href="{static_prefix}/style.css?v=42">{_FAVICON_LINKS.format(static_prefix=static_prefix)}{_NOTICE_SCRIPT.format(static_prefix=static_prefix)}</head>
 <body>{_HEADER_HTML.format(tagline_html='<p class="tagline" data-i18n="glossary.tagline"></p>', static_prefix=static_prefix, home=home, branding_html=_branding_logo_html(cfg, static_prefix))}
-<main>{_NOTICE_HTML}<div class="card">
+<main>{_notice_html(cfg)}<div class="card">
 <table border="1" cellpadding="6" cellspacing="0" style="width:100%; border-collapse: collapse;">
 <thead><tr><th data-i18n="glossary.th.term"></th><th data-i18n="glossary.th.meaning"></th><th data-i18n="glossary.th.def"></th><th data-i18n="glossary.th.lang"></th></tr></thead>
 <tbody>{rows}</tbody></table>
@@ -1158,7 +1183,7 @@ def _md_doc_page(cfg: Config, docs_dir: Path, rel_source: str, base_path: str = 
 
     body = f"""
 <!doctype html><html lang="sv"><head><meta charset="utf-8"><title>{_h(doc.title)}</title>
-<link rel="stylesheet" href="{static_prefix}/style.css?v=41">{_FAVICON_LINKS.format(static_prefix=static_prefix)}{_NOTICE_SCRIPT.format(static_prefix=static_prefix)}</head>
+<link rel="stylesheet" href="{static_prefix}/style.css?v=42">{_FAVICON_LINKS.format(static_prefix=static_prefix)}{_NOTICE_SCRIPT.format(static_prefix=static_prefix)}</head>
 <body>{_HEADER_HTML.format(tagline_html="", static_prefix=static_prefix, home=home, branding_html=_branding_logo_html(cfg, static_prefix))}
 <main><div class="card md-doc">
 <nav class="md-nav">
@@ -1445,8 +1470,8 @@ def _stats_page(
 
     body = f"""
 <!doctype html><html lang="sv"><head><meta charset="utf-8"><title>student-bot</title>
-<link rel="stylesheet" href="{static_prefix}/style.css?v=41">{_FAVICON_LINKS.format(static_prefix=static_prefix)}{_NOTICE_SCRIPT.format(static_prefix=static_prefix)}</head>
-<body>{_HEADER_HTML.format(tagline_html="", static_prefix=static_prefix, home=home, branding_html=_branding_logo_html(cfg, static_prefix))}<main>{_NOTICE_HTML}<div class="card stats-card" data-channel="{channel}" data-is-admin="{1 if is_admin else 0}">
+<link rel="stylesheet" href="{static_prefix}/style.css?v=42">{_FAVICON_LINKS.format(static_prefix=static_prefix)}{_NOTICE_SCRIPT.format(static_prefix=static_prefix)}</head>
+<body>{_HEADER_HTML.format(tagline_html="", static_prefix=static_prefix, home=home, branding_html=_branding_logo_html(cfg, static_prefix))}<main>{_notice_html(cfg)}<div class="card stats-card" data-channel="{channel}" data-is-admin="{1 if is_admin else 0}">
 <h1 data-i18n="stats.title"></h1>
 {channel_switch_html}
 <p class="stats-summary" data-i18n="stats.summary"

@@ -454,6 +454,14 @@ setInterval(() => {
 // Cloud-provider notice (#20). Populated from /api/health.cloud_provider_name;
 // empty string = local model, hide the notice everywhere. Idempotent so
 // language switches re-render the text.
+// The notice claims the model runs on KTH hardware. On the static chat page
+// that sentence ships in the markup, so it has to be removed when a cloud
+// model is configured — the server-rendered pages simply never emit it.
+// Same signal as the cloud banner, so the two cannot disagree.
+function applyLocalModelSentence(cloudName) {
+  el("#notice-model-local")?.toggleAttribute("hidden", !!cloudName);
+}
+
 function applyCloudProviderNotice(providerName) {
   const onboardingEl = el("#cloud-notice-onboarding");
   const chatEl = el("#cloud-notice-chat");
@@ -502,6 +510,7 @@ async function initPerf() {
     applyBrandingLogo(data.branding_logo_html);
     cloudProviderName = data.cloud_provider_name || "";
     applyCloudProviderNotice(cloudProviderName);
+    applyLocalModelSentence(cloudProviderName);
     state.isAdmin = !!data.is_admin;
     document.body.classList.toggle("is-admin", state.isAdmin);
   } catch (_) {
