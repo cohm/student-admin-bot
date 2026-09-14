@@ -7,6 +7,7 @@ case-by-case decisions. Bilingual (sv / en).
 
 from __future__ import annotations
 
+from student_bot.bot.citations import strip_title_hash
 from student_bot.bot.retrieval import RetrievedChunk
 from student_bot.config import Config
 
@@ -339,11 +340,20 @@ def compose_meta_fallback_messages(
 
 
 def format_context(chunks: list[RetrievedChunk]) -> str:
-    """Render retrieved chunks for the user message. Each chunk shows its citation tag."""
+    """Render retrieved chunks for the user message. Each chunk shows its citation tag.
+
+    Titles are stripped of the scraper's content hash first. 1980 of 2361
+    chunks come from web_import and every one of those titles ended in ten hex
+    characters, so the model was shown `[teknisk fysik 1ecfccae57 · …]` on most
+    turns and learned that citations are hashes — then emitted them bare, where
+    they matched nothing and reached students as raw text. The matcher still
+    accepts the hashed form, so this only changes what the model is taught.
+    """
     lines: list[str] = []
     for c in chunks:
+        title = strip_title_hash(c.doc_title)
         section = (c.section_path or "").strip()
-        tag = f"[{c.doc_title} · {section}]" if section else f"[{c.doc_title}]"
+        tag = f"[{title} · {section}]" if section else f"[{title}]"
         lines.append(f"{tag}\n{c.text}")
     return "\n\n---\n\n".join(lines)
 

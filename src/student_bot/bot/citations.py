@@ -65,6 +65,32 @@ def _chunk_dedup_key(c: RetrievedChunk) -> tuple:
     )
 
 
+# The URL scraper names files `<slug>-<n>-<10 hex>.md`, and the ingest derives
+# doc_title from the filename — so 167 of 167 web_import titles end in a content
+# hash, and web_import is 1980 of 2361 chunks. Every citation tag the model sees
+# for those looks like `[teknisk fysik 1ecfccae57 · Section]`, which is both
+# unreadable in the Sources block and taught the model that citations ARE
+# hashes: asked for a list it emitted bare `[982c61022f, 41318b481d, ...]`.
+#
+# Stripped for display and for the tag the model is given. The hashed form stays
+# registered for matching, because answers already in a conversation — and
+# models that saw the old tags — will keep emitting it.
+_TITLE_HASH_RE = re.compile(r"\s+(?:\d+\s+)?[0-9a-f]{10}$")
+
+
+def strip_title_hash(title: str) -> str:
+    """`"teknisk fysik 1ecfccae57"` -> `"teknisk fysik"`.
+
+    Only a trailing 10-hex token, optionally preceded by the scraper's
+    disambiguation counter (`"administrera dina studier 1 bdd4e9464d"`). A
+    title that merely ends in a number is left alone, and so is one whose
+    trailing token is not exactly ten hex characters.
+    """
+    cleaned = _TITLE_HASH_RE.sub("", (title or "").strip())
+    # Never strip a title down to nothing — better an ugly tag than an empty one.
+    return cleaned or (title or "").strip()
+
+
 _INLINE_CITATION_RE = re.compile(r"\[([^\[\]]+?)\]")
 # Allows one level of nested parens so `(FAQ · Section (KEX-jobb))` captures
 # the full inner text. Used as a fallback when the LLM wrote `(...)` instead
@@ -140,6 +166,10 @@ def format_source_title(cfg: Config, c: RetrievedChunk) -> str:
     title = (c.doc_title or "").strip()
     if not rel.startswith("web_import/"):
         return title
+    # Fallback path below shows doc_title, which for these carries the
+    # scraper's content hash — that is what put "tentamensregler 1 c4232d0e5f"
+    # in the Sources block.
+    title = strip_title_hash(title)
 
     meta = _source_map(cfg).get(rel, {})
     pretty = str(meta.get("title", "")).strip()
@@ -327,16 +357,21 @@ def apply_citation_numbering(
     by_title_norm: dict[str, list[int]] = {}
     by_section_norm: dict[str, list[int]] = {}
     for i, c in enumerate(rows):
-        title = c.doc_title
         section = (c.section_path or "").strip()
+        # Both the clean title and the hashed original: the model is now shown
+        # the clean one, but a conversation started before this change — or a
+        # model echoing an older turn — still emits the hashed form.
+        titles = dict.fromkeys([strip_title_hash(c.doc_title), c.doc_title])
+        for title in titles:
+            if section:
+                by_full[f"{title} – {section}"] = i
+                by_full[f"{title} — {section}"] = i
+                by_full[f"{title} · {section}"] = i
+                by_full_norm.setdefault(_normalize_citation(f"{title} · {section}"), i)
+            by_title.setdefault(title, []).append(i)
+            by_title_norm.setdefault(_normalize_citation(title), []).append(i)
         if section:
-            by_full[f"{title} – {section}"] = i
-            by_full[f"{title} — {section}"] = i
-            by_full[f"{title} · {section}"] = i
-            by_full_norm.setdefault(_normalize_citation(f"{title} · {section}"), i)
             by_section_norm.setdefault(_normalize_citation(section), []).append(i)
-        by_title.setdefault(title, []).append(i)
-        by_title_norm.setdefault(_normalize_citation(title), []).append(i)
 
     cited_indices: list[int] = []
     number_for: dict[int, int] = {}
