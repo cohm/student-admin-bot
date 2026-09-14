@@ -50,6 +50,11 @@ gate:
   # the top-K naturally pulls in more distinct chunks before the dedup at
   # citation time. Relax accordingly.
   max_distinct_sources_in_topk: 8
+  # Below this top-1 score a refusal drops the "contact the study counselor"
+  # line: the question is plainly off-topic and the counselor cannot help
+  # either (#84). Derived from the same eval set — in-domain refusals span
+  # -2.64..-0.88, OOD refusals reach -6.11. Re-tune with the thresholds above.
+  offtopic_top1_max: -3.0
 
 llm:
   # Master selector. Identifier is `<provider_key>/<model_id>`, split on the

@@ -79,6 +79,24 @@ class GateConfig(BaseModel):
     rerank_meanK_min: float
     meanK: int = 3
     max_distinct_sources_in_topk: int = 3
+    # Below this top-1 score a refused question is treated as plainly
+    # off-topic, and the refusal stops referring the student to the study
+    # counselor — sending "how do I cook pasta carbonara?" to a counselor makes
+    # work for someone who cannot help (#84).
+    #
+    # Derived from eval/eval_set.yml, which labels in-domain vs OOD. Among
+    # REFUSED questions the two sets separate at the bottom of the range:
+    # in-domain refusals span -2.64..-0.88, while 10 of 14 OOD refusals sit
+    # below -3.0 and none of the in-domain ones do. So -3.0 suppresses the
+    # referral for most off-topic questions and for no in-domain one.
+    #
+    # The overlap is at the TOP of the OOD range ("What's 2+2?" scores -0.02,
+    # "Recommend a good pizza place near KTH" +0.24 — both above every
+    # in-domain refusal), which is why this is a conservative floor rather than
+    # a midpoint: when the signal is ambiguous the student still gets pointed
+    # somewhere. Cross-encoder logits are model-specific, so re-tune this
+    # alongside rerank_top1_min whenever the reranker or corpus changes.
+    offtopic_top1_max: float = -3.0
 
 
 class ProviderConfig(BaseModel):
