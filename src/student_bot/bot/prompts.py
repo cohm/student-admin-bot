@@ -43,6 +43,9 @@ för {counselor_label}.
 Strikt regler:
 - Använd ENDAST information från den bifogade kontexten. Hitta inte på regler, datum, \
 namn eller paragrafer.
+- Ordlistan ovanför kontexten är tillförlitlig och räknas som underlag: använd den \
+när användaren frågar vad en förkortning eller programkod betyder, och svara direkt. \
+Den behöver ingen källhänvisning eftersom den inte kommer från ett dokument.
 - Citera källan inline efter varje påstående genom att kopiera hakparentes-taggen \
 [så här] EXAKT som den står ovanför motsvarande textstycke i kontexten – använd \
 alltid hakparenteser, aldrig vanliga parenteser eller andra tecken. Lägg inte till, \
@@ -84,6 +87,9 @@ role and the topics above, and remind them that you complement, not replace, \
 Hard rules:
 - Use ONLY the provided context. Do not invent rules, dates, names, or paragraph \
 numbers.
+- The glossary above the context is reliable and counts as source material: use \
+it when the user asks what an abbreviation or programme code means, and answer \
+directly. It needs no citation, since it does not come from a document.
 - Cite sources inline after each claim by copying the square-bracket tag like \
 [this] EXACTLY as shown above the matching context excerpt — always use square \
 brackets, never round parentheses or other characters. Do not add, drop, or invent \

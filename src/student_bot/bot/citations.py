@@ -92,6 +92,9 @@ def strip_title_hash(title: str) -> str:
 
 
 _INLINE_CITATION_RE = re.compile(r"\[([^\[\]]+?)\]")
+# The prompt glossary, cited as if it were a document. Matched with any leading
+# horizontal space so removing it leaves no gap.
+_GLOSSARY_CITATION_RE = re.compile(r"[ \t]*\[(?:ordlista|glossary)\]", re.IGNORECASE)
 # Allows one level of nested parens so `(FAQ · Section (KEX-jobb))` captures
 # the full inner text. Used as a fallback when the LLM wrote `(...)` instead
 # of `[...]` despite the prompt; matches are gated on confident lookups so we
@@ -430,16 +433,21 @@ def apply_citation_numbering(
             # best-scoring section. Citing the right document at a plausible
             # section beats showing the reader a hash.
             return candidates[0]
-        # Section-only unique: if the LLM dropped the title but the tail
-        # uniquely identifies a registered section, accept the match.
+        # Section-only: the LLM dropped or mistyped the title but the tail names
+        # a registered section. Best-ranked row wins rather than requiring
+        # exactly one — see the note on the title fallback above: a document
+        # contributing several rows to the top-K is the normal case, and
+        # requiring uniqueness here failed on a one-character typo
+        # ("tillgodoraknande" -> "tillgodoraknander") whose section matched
+        # exactly and whose document had two rows.
         if sep > -1:
             tail = content[sep + len(" · ") :].strip()
             tail_candidates = by_section_norm.get(_normalize_citation(tail), [])
-            if len(tail_candidates) == 1:
+            if tail_candidates:
                 return tail_candidates[0]
-        # Fuzzy-contains: normalized inline title is a substring of exactly
-        # one registered title (or vice versa). Catches tokenization quirks
-        # like trailing colons / parens the LLM might paste verbatim.
+        # Fuzzy-contains: normalized inline title is a substring of a registered
+        # title (or vice versa). Catches tokenization quirks like trailing
+        # colons / parens, and small typos. Same best-ranked rule as above.
         n_title = _normalize_citation(title)
         if n_title:
             container_hits: list[int] = []
@@ -452,11 +460,15 @@ def apply_citation_numbering(
                 elif reg_norm in n_title:
                     contained_hits.extend(idxs)
             unique = list(dict.fromkeys(container_hits or contained_hits))
-            if len(unique) == 1:
+            if unique:
                 return unique[0]
         log.info("citation fallthrough: %r", content)
         return None
 
+    # The prompt glossary is real source material but not a document, so it has
+    # no citation tag. Told it may answer from the glossary, the model cites it
+    # anyway — "…har programkoden TTFYM [Ordlista]." Drop the marker rather
+    # than leave a dangling reference to a thing with no Sources row.
     def _replace(m: re.Match) -> str:
         content = m.group(1).strip()
         idx = _match(content, allow_title_only=True)
@@ -491,7 +503,14 @@ def apply_citation_numbering(
             return m.group(0)
         return f"[{_assign(idx)}]"
 
-    new_body = _INLINE_CITATION_RE.sub(_replace, body)
+    # Strip the glossary pseudo-citation together with its leading space, so
+    # no gap is left to repair. The prompt glossary is real source material but
+    # not a document, so it has no tag and no Sources row; told it may answer
+    # from the glossary, the model cites it anyway — "…programkoden TTFYM
+    # [Ordlista]." Removing the tag alone would leave " ." behind, and
+    # repairing that afterwards also reflows markdown list indentation.
+    new_body = _GLOSSARY_CITATION_RE.sub("", body)
+    new_body = _INLINE_CITATION_RE.sub(_replace, new_body)
     new_body = _PARENS_CITATION_RE.sub(_replace_parens, new_body)
     cited = [rows[i] for i in cited_indices]
     return new_body, cited
