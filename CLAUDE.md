@@ -13,6 +13,7 @@ Entry-point names come from `pyproject.toml` `[project.scripts]`; the `student-b
 - `uv run student-bot-web` — FastAPI web UI (binds 127.0.0.1 by default).
 - `uv run student-bot` — Mattermost websocket bot.
 - `uv run python -m scripts.reindex` — rebuild Chroma index from `docs/corpus/`. Incremental by content hash.
+- `uv run student-bot-sweep [--only GROUP] [--show]` — runs questions through the **full** pipeline, LLM included, and checks the generated answers (citation rendering, refusal wording, glossary use). Needs a working LLM — check with `student-bot-doctor --generate`. Not deterministic: re-run a red row before believing it. Add a case whenever a real answer comes out wrong.
 - `uv run python -m eval.run_eval` (`--show-failures`, `--json-out FILE`) — recall@5 + gate accuracy. Does **not** call the LLM. `--json-out` writes the same numbers machine-readably, which is what `scripts/eval_compare.py` diffs between two runs.
 - `uv run student-bot-stats [--since 7d]` — per-topic counts, latency, 👍/👎 ratios. On prod there is no `uv`: `docker compose run --rm web student-bot-stats --since 7d`.
 - `uv run student-bot-mkuser <name>` — create a web auth user (scrypt).

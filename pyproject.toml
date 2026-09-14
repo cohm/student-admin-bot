@@ -91,6 +91,7 @@ student-bot-fetch-url-corpus = "scripts.fetch_url_corpus:main"
 student-bot-replay-failures = "scripts.replay_failures:main"
 student-bot-notify = "scripts.notify:main"
 student-bot-doctor = "scripts.dev_doctor:main"
+student-bot-sweep = "eval.answer_sweep:main"
 student-bot-eval-compare = "scripts.eval_compare:main"
 
 [build-system]

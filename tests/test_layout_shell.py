@@ -32,10 +32,23 @@ def _rule(selector: str) -> str:
     return " ".join(bodies)
 
 
-def test_the_page_itself_does_not_scroll():
+def test_the_chat_page_does_not_scroll():
+    """Scoped to `.app-shell`, not bare `body`. Unscoped it also locked the
+    server-rendered About / Ordlista / Statistik pages, which have no internal
+    scroll region — so their content was simply clipped."""
+    shell = _rule("body.app-shell")
+    assert "height: 100dvh" in shell
+    assert "overflow: hidden" in shell
+
+
+def test_every_other_page_scrolls_normally():
     body = _rule("body")
-    assert "height: 100dvh" in body
-    assert "overflow: hidden" in body
+    assert "min-height: 100dvh" in body
+    assert "overflow: hidden" not in body
+
+
+def test_only_the_chat_page_carries_the_shell_class():
+    assert 'class="app-shell"' in INDEX
 
 
 def test_the_transcript_is_the_scrolling_region():
@@ -50,7 +63,7 @@ def test_the_transcript_has_no_fixed_cap():
     assert "max-height: 60dvh" not in CSS
 
 
-@pytest.mark.parametrize("selector", ["main", "#chat", "#messages"])
+@pytest.mark.parametrize("selector", ["body.app-shell main", "#chat", "#messages"])
 def test_every_flex_ancestor_can_shrink(selector):
     """Without `min-height: 0` a flex child refuses to shrink below its content
     and the overflow escapes the shell — the failure is silent and looks like
@@ -84,7 +97,7 @@ def test_debug_view_keeps_its_horizontal_scroll():
     """The retrieval table has a 1000px floor. With the page locked, the scroll
     must live on body — `main` IS the oversized element, so overflow-x there
     does nothing and the right-hand columns are silently clipped."""
-    assert "body.viewing-debug { overflow-x: auto; }" in CSS
+    assert "body.app-shell.viewing-debug { overflow-x: auto; }" in CSS
 
 
 def test_debug_panel_scrolls_vertically():
