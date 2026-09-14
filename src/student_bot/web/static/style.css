@@ -799,6 +799,50 @@ body.viewing-debug { overflow-x: auto; }
 .stats-inspector-error { color: var(--kth-darkbrick); }
 
 
+
+/* --- Debug view: the session list (#92) ---------------------------------
+   Native <details>/<summary>, so expand/collapse, keyboard operation and
+   screen-reader semantics come for free rather than being reimplemented. */
+.debug-turns { display: flex; flex-direction: column; gap: 8px; }
+.debug-turn {
+  border: 1px solid var(--border);
+  border-radius: 6px;
+  background: #fff;
+}
+.debug-turn[open] { border-color: var(--kth-skyblue); }
+.debug-turn-head {
+  display: flex;
+  align-items: baseline;
+  gap: 10px;
+  padding: 10px 12px;
+  cursor: pointer;
+  list-style: none;          /* Firefox draws its own marker without this */
+  font-size: 14px;
+}
+.debug-turn-head::-webkit-details-marker { display: none; }
+.debug-turn-head::after {
+  content: "▸";
+  margin-left: auto;
+  color: var(--muted);
+  flex-shrink: 0;
+}
+.debug-turn[open] > .debug-turn-head::after { content: "▾"; }
+.debug-turn-head:hover { background: var(--kth-brokenwhite); }
+.debug-turn-n {
+  flex-shrink: 0;
+  min-width: 1.6em;
+  color: var(--muted);
+  font-variant-numeric: tabular-nums;
+}
+.debug-turn-q {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.debug-turn[open] > .debug-turn-head > .debug-turn-q { white-space: normal; }
+.debug-turn-body { padding: 0 12px 12px; border-top: 1px solid var(--border); }
+
 /* ---------------------------------------------------------------------------
    Narrow viewports.
    Until now this stylesheet had NO media queries at all, so phones were served
