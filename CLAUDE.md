@@ -65,7 +65,7 @@ The bot deliberately teaches LLM literacy through five repeating surfaces: confi
 
 ## The presentation deck mirrors the product
 
-`docs/slides/index.html` is a self-contained reveal.js talk (+ `kth-reveal.{css,js}`, `KTH_logo_RGB_bla.svg`, `widgets/pipeline.html`) served at `/slides/` and linked from the About page. It ships in the Docker image via `COPY docs/slides`. **It hard-codes facts about the running system** — model names, gate thresholds, the system prompt text, corpus categories, recall/eval numbers, the literacy + debug surfaces, and the dynamic-web allowlist. When you change any of those, update the deck to match, or it will quietly drift out of sync. The deck is static assets only (no reindex, no eval impact); just bump nothing — it has no cache-buster.
+`docs/slides/index.html` is a self-contained reveal.js talk (+ `kth-reveal.{css,js}`, `KTH_logo_RGB_bla.svg`, `widgets/pipeline.html`) served at `/slides/` and linked from the About page. It ships in the Docker image via `COPY docs/slides`. **It hard-codes facts about the running system** — model names, gate thresholds, the system prompt text, corpus categories, recall/eval numbers, the literacy + debug surfaces, and the dynamic-web allowlist. When you change any of those, update the deck to match, or it will quietly drift out of sync. The deck is static assets only (no reindex, no eval impact); just bump nothing — it has no cache-buster. `tests/test_slides_in_sync.py` pins the values that also live in `config.yaml` (gate thresholds, model names), so those at least cannot drift silently; eval percentages are not pinned and still need a human.
 
 ## Where to start by task type
 
