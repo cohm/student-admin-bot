@@ -71,7 +71,12 @@ def check_dynamic_web(cfg) -> tuple[str, str, str]:
         return _row("dynamic web fetch", None, "disabled in config.yaml")
     try:
         t0 = time.monotonic()
-        res = maybe_fetch_dynamic_web(cfg, "Vem är ansvarig för CTFYS?", "sv")
+        # Must be a question that genuinely NEEDS the study plan. The probe
+        # used to be "Vem är ansvarig för CTFYS?", which #129 then made bypass
+        # the fetch by design — so the doctor started reporting the fetch as
+        # broken when it was working perfectly. A health check that fails on
+        # correct behaviour is worse than no health check.
+        res = maybe_fetch_dynamic_web(cfg, "Vilka kurser ingår i CTFYS årskurs 2 HT2024?", "sv")
         ms = int((time.monotonic() - t0) * 1000)
     except Exception as e:
         return _row("dynamic web fetch", False, f"{type(e).__name__}: {e}")
