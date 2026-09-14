@@ -47,7 +47,7 @@ The README's ASCII diagram and per-file role table are the fastest way in for co
 
 - **Embeddings + reranker run on CPU on purpose.** Metal stays exclusively with Ollama. Don't switch them to MPS/CUDA without thinking about RAM.
 - **bge-m3 does NOT use e5 `query:` / `passage:` prefixes.** `config.yaml` keeps them empty; do not "fix" this.
-- **Re-tune `gate.rerank_top1_min` / `rerank_meanK_min` via `eval/run_eval.py` after any change to embedding model, reranker, or corpus.** Cross-encoder logits are unbounded and model-specific.
+- **Re-tune `gate.rerank_top1_min` / `rerank_meanK_min` / `offtopic_top1_max` via `eval/run_eval.py` after any change to embedding model, reranker, or corpus.** Cross-encoder logits are unbounded and model-specific. `offtopic_top1_max` decides whether a refusal names the study counselor — it must stay below every in-domain refusal score, or a student with a real question is told nothing and sent nowhere (`tests/test_counselor_referral.py` guards the margin).
 - **The gate is intentionally biased toward false-refuse.** When tuning, prefer the in-domain min over the OOD max. Cost of refusing a real question = one counselor email; cost of a confident hallucination = wrong policy.
 - **The LLM has no agentic tools — that's the prompt-injection security boundary.** No shell, no MCP, no web fetch, no file write. Don't add any.
 - **Logging is opt-out, not opt-in.** User IDs are salted SHA-256 (salt from `USER_ID_HASH_SALT`). Opted-out traffic still bumps `anon_counter` (lang + gate-pass only). One-shot disclosure tracked in `disclosed`. Surfaces: Mattermost `!privacy off/on/status`, web onboarding checkbox.

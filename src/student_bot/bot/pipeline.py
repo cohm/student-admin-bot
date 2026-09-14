@@ -39,6 +39,7 @@ from student_bot.bot.prompts import (
     compose_meta_fallback_messages,
     empty_answer_message,
     llm_unavailable_message,
+    question_is_offtopic,
     refusal_message,
 )
 from student_bot.bot.retrieval import RetrievalResult, RetrievedChunk, get_reranker, retrieve
@@ -991,7 +992,16 @@ def answer(
             log.warning("meta-fallback LLM call failed: %s", e)
             llm_error = True
         if not body:
-            body = llm_unavailable_message(lang) if llm_error else refusal_message(cfg, lang)
+            # Only offer the counselor when the question is plausibly in
+            # scope. Far below the gate it is not, and the referral would send
+            # someone to a person who cannot help — see gate.offtopic_top1_max.
+            body = (
+                llm_unavailable_message(lang)
+                if llm_error
+                else refusal_message(
+                    cfg, lang, offer_counselor=not question_is_offtopic(cfg, gate.top1)
+                )
+            )
             if on_token:
                 on_token(body)
         rendered = _render(
