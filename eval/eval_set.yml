@@ -380,3 +380,22 @@
   expected_any:
     - "ansvariga-for-grundutbildningen-pa-sci"
     - "programansvariga"
+
+- question: "What is the programme code for the master's in engineering physics?"
+  kind: in_domain
+  lang: en
+  # English name collision: "engineering physics" matches both CTFYS and TTFYM.
+  # The possessive "master's" is the disambiguator; the level prior missed it
+  # because it only looked for the full "master's programme" form.
+  expected_any:
+    - "programoversikt-koder"
+    - "teknisk-fysik"
+
+- question: "Vad har masterprogrammet i teknisk fysik för programkod?"
+  kind: in_domain
+  lang: sv
+  # #85: answerable only from the prompt glossary until the programme table
+  # became an indexed document, so there was nothing to cite.
+  expected_any:
+    - "programoversikt-koder"
+    - "teknisk-fysik"

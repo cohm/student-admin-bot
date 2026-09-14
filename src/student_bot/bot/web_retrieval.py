@@ -840,18 +840,23 @@ def _program_level(code: str) -> str:
     return "other"
 
 
+# "masterprogram(met)", "master's programme", "the master's in …", "masters in".
+# The possessive form carries the signal; a bare "master" does not (see below).
+_MASTER_LEVEL_RE = re.compile(r"masterprogram|master'?s\b|master\s+program(?:me)?\b", re.IGNORECASE)
+
+
 def _level_prior_from_question(question: str) -> set[str] | None:
     """Infer which program levels the user is asking about. None = no signal."""
     qn = _norm(question)
     year = _parse_programme_year_level(question)
     has_civ = "civilingenjör" in qn or "civilingenjor" in qn or "civil engineering" in qn
-    has_master = (
-        "masterprogram" in qn
-        or "master's programme" in qn
-        or "master programme" in qn
-        or "master's program" in qn
-        or "master program" in qn
-    )
+    # The possessive "master's"/"masters" is a reliable signal on its own —
+    # "the master's in engineering physics", "a masters in maths" — and the
+    # earlier list of full programme forms missed all of those. Deliberately
+    # NOT a bare "master": "how long do I have to finish a master thesis?" is a
+    # corpus question about examensarbete, and giving it a master-level
+    # programme prior would steer it at a programme page.
+    has_master = bool(_MASTER_LEVEL_RE.search(qn))
     has_hogskole = "högskoleingenjör" in qn or "hogskoleingenjor" in qn
     has_bachelor = "kandidatprogram" in qn or "bachelor" in qn
 
