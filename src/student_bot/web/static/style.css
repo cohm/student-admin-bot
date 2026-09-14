@@ -64,7 +64,12 @@ html, body {
    this, a 900px viewport overflowed by 158px AND #messages had its own
    scrollbar, so there were two scroll contexts and the composer sat 40px below
    the fold. Released again below 768px — see the media query at the end. */
-body { display: flex; flex-direction: column; height: 100dvh; overflow: hidden; }
+/* Base: every page scrolls normally. The app shell below is opt-in, because
+   only the chat page has an internal scrolling region to hand the space to —
+   `height: 100dvh; overflow: hidden` on a plain document simply clips it, which
+   is what happened to About / Ordlista / Statistik when the shell landed. */
+body { display: flex; flex-direction: column; min-height: 100dvh; }
+body.app-shell { height: 100dvh; overflow: hidden; }
 button, input, textarea, select { font-family: inherit; }
 /* 1fr / auto / 1fr keeps the side columns equal width, so the brand
    cluster (logos + title) lands at the page midpoint while the lang
@@ -105,13 +110,19 @@ header h1 { margin: 0; font-size: 22px; }
    shrink below their content height and the overflow escapes the shell. */
 main {
   flex: 1;
-  min-height: 0;
-  display: flex;
-  flex-direction: column;
   padding: 16px 32px;
   max-width: 880px;
   width: 100%;
   margin: 0 auto;
+}
+/* Only the shell needs main to be a shrinkable flex column: that is what lets
+   #messages take the leftover height. `min-height: 0` is load-bearing — without
+   it a flex child refuses to shrink below its content and the overflow escapes
+   the shell. */
+body.app-shell main {
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
 }
 footer { padding: 12px 32px; color: var(--muted); font-size: 13px; border-top: 1px solid var(--border); }
 footer a { color: var(--muted); margin-right: 8px; }
@@ -530,7 +541,7 @@ body.viewing-debug #debug-panel {
    would silently clip the right-hand columns instead. The scroll has to live on
    `body`: `main` IS the 1000px element, so giving *it* overflow-x does nothing
    — its own content fits. Vertical stays hidden, so the shell still holds. */
-body.viewing-debug { overflow-x: auto; }
+body.app-shell.viewing-debug { overflow-x: auto; }
 
 /* --- Learn-more debug panel (#45 / #19) --- */
 
@@ -876,8 +887,8 @@ body.viewing-debug { overflow-x: auto; }
      so the page scrolls normally and the composer sticks to the bottom
      instead, which gets the same "always reachable" result without fighting
      the keyboard. */
-  body { height: auto; min-height: 100dvh; overflow: visible; }
-  main { display: block; }
+  body.app-shell { height: auto; min-height: 100dvh; overflow: visible; }
+  body.app-shell main { display: block; }
   #chat { display: block; }
   #messages { max-height: none; overflow-y: visible; }
   #composer {
