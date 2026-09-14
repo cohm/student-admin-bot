@@ -63,8 +63,11 @@
 #                     Each build costs roughly 5 GB of cache on this host.
 #   BOT_PRUNE_CACHE   Set to 0 to skip pruning build cache after a successful
 #                     deploy. Default: on.
+#   BOT_CACHE_MAX_GB  Build-cache budget, trimmed to this after each deploy and
+#                     whenever free space is short. Default: 10 (~2 builds).
 #   BOT_CACHE_KEEP_HOURS
-#                     Age above which build cache is pruned. Default: 168 (7d).
+#                     Only used on Docker too old for a size budget, where the
+#                     prune falls back to an age filter. Default: 24.
 #
 # USAGE
 #   scripts/deploy.sh                      # the normal path
@@ -173,20 +176,68 @@ docker compose version >/dev/null 2>&1 || die "'docker compose' is unavailable"
 # disk. Check up front instead. Real numbers from this host: build cache grew
 # to 11.2 GB over two builds on a 30 GB disk, so roughly 5 GB per build.
 MIN_FREE_GB="${BOT_MIN_FREE_GB:-8}"
-check_free_space() {
-  local target avail_kb avail_gb
+# Build-cache budget. One build costs roughly 4.5 GB here, so 10 GB keeps about
+# two builds' worth of reuse — which is what makes an incremental deploy fast —
+# while leaving room on a 30 GB disk. The previous rule pruned only cache older
+# than 7 days, which never fires during a run of same-day bugfix deploys: three
+# on 2026-09-14 left 13.19 GB of cache, all of it too young to prune, and the
+# fourth deploy hit the free-space guard.
+CACHE_MAX_GB="${BOT_CACHE_MAX_GB:-10}"
+docker_root() {
+  local target
   # Docker writes images and cache under its own root, which may live on a
   # different filesystem than the checkout.
   target="$(docker info --format '{{.DockerRootDir}}' 2>/dev/null || true)"
-  [[ -d "${target:-}" ]] || target="$REPO_ROOT"
-  avail_kb="$(df -Pk "$target" 2>/dev/null | awk 'NR==2 {print $4}')" || return 0
-  [[ "$avail_kb" =~ ^[0-9]+$ ]] || return 0
-  avail_gb=$(( avail_kb / 1024 / 1024 ))
-  info "free space on $target: ${avail_gb} GB"
+  [[ -d "${target:-}" ]] && printf '%s' "$target" || printf '%s' "$REPO_ROOT"
+}
+
+free_gb() {
+  local avail_kb
+  avail_kb="$(df -Pk "$(docker_root)" 2>/dev/null | awk 'NR==2 {print $4}')" || return 1
+  [[ "$avail_kb" =~ ^[0-9]+$ ]] || return 1
+  printf '%s' "$(( avail_kb / 1024 / 1024 ))"
+}
+
+# Trim build cache to CACHE_MAX_GB. Docker renamed the flag: --keep-storage
+# became --max-used-space in Docker 28. Detect rather than assume, because
+# passing the wrong one fails the whole prune and this runs unattended.
+prune_cache_to_budget() {
+  local flag=""
+  if docker builder prune --help 2>&1 | grep -q -- "--max-used-space"; then
+    flag="--max-used-space"
+  elif docker builder prune --help 2>&1 | grep -q -- "--keep-storage"; then
+    flag="--keep-storage"
+  fi
+  if [[ -z "$flag" ]]; then
+    # Very old Docker: no size budget available, so fall back to age.
+    warn "this Docker has no build-cache size flag; pruning by age instead"
+    docker builder prune -f --filter "until=${BOT_CACHE_KEEP_HOURS:-24}h" || true
+    return
+  fi
+  info "trimming build cache to ${CACHE_MAX_GB} GB ($flag)"
+  docker builder prune -f "$flag" "${CACHE_MAX_GB}GB" \
+    || warn "build cache prune failed (harmless); run 'docker builder prune -f' by hand"
+}
+
+check_free_space() {
+  local avail_gb
+  avail_gb="$(free_gb)" || return 0
+  info "free space on $(docker_root): ${avail_gb} GB"
+  (( avail_gb >= MIN_FREE_GB )) && return 0
+
+  # Self-heal before giving up. Build cache is pure cache — discarding it costs
+  # rebuild time and nothing else — and it is almost always what filled the
+  # disk: 13.19 GB of it on 2026-09-14, 100% reclaimable and 0% in use, after
+  # three deploys in one day. Failing and telling the operator to run the same
+  # prune by hand is a step nobody would decline.
+  warn "only ${avail_gb} GB free, want >= ${MIN_FREE_GB} GB — trimming build cache"
+  prune_cache_to_budget
+  avail_gb="$(free_gb)" || return 0
+  info "free space after trim: ${avail_gb} GB"
   if (( avail_gb < MIN_FREE_GB )); then
-    die "only ${avail_gb} GB free on $target, want >= ${MIN_FREE_GB} GB.
-        Reclaim build cache first (this is usually the bulk of it):
-            docker builder prune -f
+    die "still only ${avail_gb} GB free on $(docker_root), want >= ${MIN_FREE_GB} GB.
+        Build cache has already been trimmed, so something else is using the disk:
+            docker system df
             docker image prune -f
         Override the threshold with BOT_MIN_FREE_GB if you know better."
   fi
@@ -397,9 +448,8 @@ build_and_restart() {
   # re-deploy is still fast, drop the rest. Non-fatal — an old Docker without
   # this filter must not fail a deploy that has already succeeded.
   if [[ "${BOT_PRUNE_CACHE:-1}" != "0" ]]; then
-    step "Pruning build cache older than ${BOT_CACHE_KEEP_HOURS:-168}h"
-    docker builder prune -f --filter "until=${BOT_CACHE_KEEP_HOURS:-168}h" \
-      || warn "build cache prune failed (harmless); run 'docker builder prune -f' by hand"
+    step "Pruning build cache"
+    prune_cache_to_budget
   fi
 }
 

@@ -295,6 +295,35 @@ Files written this way are root-owned, which is fine here because every corpus
 operation on this host goes through a container. On a host that does have
 `uv`, prefer `uv run student-bot-fetch-url-corpus` so ownership stays sane.
 
+### Disk space and the build cache
+
+Each `docker compose build` leaves roughly **4.5 GB** of build cache. That is
+the point — it is what makes an incremental deploy fast — but on a 30 GB VM it
+accumulates faster than it looks: three deploys on 2026-09-14 left **13.19 GB**
+of cache, all of it reclaimable and none of it in use, and the fourth deploy
+stopped on the free-space guard.
+
+`scripts/deploy.sh` now keeps the cache to a budget (`BOT_CACHE_MAX_GB`,
+default 10 — about two builds' worth of reuse) rather than pruning by age. The
+old rule only dropped cache older than seven days, which never fires during a
+run of same-day bugfix deploys.
+
+It also trims **before** failing: if free space is short, the cache is pruned
+and the check re-run, and the deploy only stops if something other than cache
+is filling the disk. Build cache is pure cache, so discarding it costs rebuild
+time and nothing else — there was never a reason to ask a human first.
+
+To inspect by hand:
+
+```bash
+docker system df                       # where the space actually went
+docker builder prune -f                # discard all build cache
+docker image prune -f                  # dangling images
+```
+
+Do **not** run `docker system prune -a`: it removes the `student-bot:latest`
+image the running containers were started from.
+
 ## Weekly corpus maintenance: `scripts/maintain.sh`
 
 The four commands above, unattended and with a verdict. Cron entry:
