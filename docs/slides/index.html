@@ -254,9 +254,9 @@
           <div class="kthbox">
             <strong>Total budget</strong>
             <ul style="margin: 0.4em 0 0;">
-              <li>One small machine (16 GB RAM)</li>
+              <li>A small VM for retrieval, a shared DGX&nbsp;Spark for generation</li>
               <li>Zero cloud cost</li>
-              <li>No data leaves your own hardware</li>
+              <li>No data leaves KTH hardware</li>
             </ul>
           </div>
         </div>
@@ -424,7 +424,7 @@
       <p>A <em>"How the bot thought"</em> tab lets any student open the hood on their own question &mdash; the same retrieval, rerank, and gate internals an operator sees.</p>
       <div class="cols-2" style="margin-top: 0.4em;">
         <div>
-          <p>Tick <span class="kthhl">"Learn more"</span>, then click the <strong>🔍</strong> next to any answer:</p>
+          <p>Tick <span class="kthhl">"Learn more"</span> and open the tab: every question from the session is listed, and opening one shows</p>
           <ul>
             <li class="fragment fade-in"><strong>Routing</strong> &mdash; detected language, jargon hits, the expanded query</li>
             <li class="fragment fade-in"><strong>Gate</strong> &mdash; pass / refuse, top-1 and mean-top-K scores, and why</li>
@@ -437,7 +437,7 @@
             <strong>Why expose the internals?</strong>
             <ul style="margin: 0.4em 0 0;">
               <li>Turns <em>"trust me"</em> into <em>"check for yourself"</em></li>
-              <li>Makes the abstract pipeline a thing you can <em>read</em>, one turn at a time</li>
+              <li>Makes the abstract pipeline a thing you can <em>read</em> &mdash; and compare across turns, side by side</li>
               <li>Reinforces surfaces 1 &amp; 2: verify the source, fluency &ne; correctness</li>
             </ul>
           </div>
@@ -722,7 +722,7 @@
         <div>
           <h3 style="color: var(--kth-blue);">Models</h3>
           <ul>
-            <li><code>gemma4-31b</code> via LiteLLM on a DGX&nbsp;Spark (tailnet) &mdash; was <code>gemma-4-E4B</code> on a Mac mini (Ollama/Metal)</li>
+            <li><code>gemma4-26b-a4b</code> (MoE) via LiteLLM on a DGX&nbsp;Spark (tailnet) &mdash; was <code>gemma-4-E4B</code> on a Mac mini (Ollama/Metal); ~3&times; prefill over the dense 31b</li>
             <li><code>BAAI/bge-m3</code> embeddings (CPU)</li>
             <li><code>cross-encoder/mmarco-mMiniLMv2-L12-H384-v1</code> reranker (CPU)</li>
           </ul>
@@ -758,8 +758,8 @@
       <h1>What we tune against</h1>
       <div class="stats-stage">
         <div class="stat-spotlight" data-id="stat-1">
-          <div class="big-stat" style="color: var(--kth-blue);">73&thinsp;%</div>
-          <div class="big-stat-label">cross-lingual recall@5 (bge-m3, vs 47 % for e5-base)</div>
+          <div class="big-stat" style="color: var(--kth-blue);">98&thinsp;%</div>
+          <div class="big-stat-label">cross-lingual recall@5 &mdash; 44/45 (bge-m3; e5-base managed 47 %)</div>
         </div>
       </div>
     </section>
@@ -769,12 +769,12 @@
       <h1>What we tune against</h1>
       <div class="stats-stage">
         <div class="stat-row" data-id="stat-1">
-          <div class="big-stat" style="color: var(--kth-blue);">73&thinsp;%</div>
+          <div class="big-stat" style="color: var(--kth-blue);">98&thinsp;%</div>
           <div class="big-stat-label">cross-lingual recall@5</div>
         </div>
         <div class="stat-spotlight" data-id="stat-2">
-          <div class="big-stat" style="color: var(--kth-teal);">100&thinsp;%</div>
-          <div class="big-stat-label">OOD refusal on the seed eval (15/15)</div>
+          <div class="big-stat" style="color: var(--kth-teal);">93&thinsp;%</div>
+          <div class="big-stat-label">OOD refusal &mdash; 14/15</div>
         </div>
       </div>
     </section>
@@ -784,16 +784,16 @@
       <h1>What we tune against</h1>
       <div class="stats-stage">
         <div class="stat-row" data-id="stat-1">
-          <div class="big-stat" style="color: var(--kth-blue);">73&thinsp;%</div>
+          <div class="big-stat" style="color: var(--kth-blue);">98&thinsp;%</div>
           <div class="big-stat-label">cross-lingual recall@5</div>
         </div>
         <div class="stat-row" data-id="stat-2">
-          <div class="big-stat" style="color: var(--kth-teal);">100&thinsp;%</div>
+          <div class="big-stat" style="color: var(--kth-teal);">93&thinsp;%</div>
           <div class="big-stat-label">OOD refusal</div>
         </div>
         <div class="stat-spotlight" data-id="stat-3">
-          <div class="big-stat" style="color: var(--kth-green);">77&thinsp;%</div>
-          <div class="big-stat-label">in-domain pass rate</div>
+          <div class="big-stat" style="color: var(--kth-green);">87&thinsp;%</div>
+          <div class="big-stat-label">in-domain pass rate &mdash; 39/45</div>
         </div>
       </div>
     </section>
@@ -803,15 +803,15 @@
       <h1>What we tune against</h1>
       <div class="stats-stage">
         <div class="stat-row" data-id="stat-1">
-          <div class="big-stat" style="color: var(--kth-blue);">73&thinsp;%</div>
+          <div class="big-stat" style="color: var(--kth-blue);">98&thinsp;%</div>
           <div class="big-stat-label">cross-lingual recall@5</div>
         </div>
         <div class="stat-row" data-id="stat-2">
-          <div class="big-stat" style="color: var(--kth-teal);">100&thinsp;%</div>
+          <div class="big-stat" style="color: var(--kth-teal);">93&thinsp;%</div>
           <div class="big-stat-label">OOD refusal</div>
         </div>
         <div class="stat-row" data-id="stat-3">
-          <div class="big-stat" style="color: var(--kth-green);">77&thinsp;%</div>
+          <div class="big-stat" style="color: var(--kth-green);">87&thinsp;%</div>
           <div class="big-stat-label">in-domain pass</div>
         </div>
         <div class="stat-spotlight" data-id="stat-4">
@@ -901,9 +901,10 @@
           <p>A passing question must clear <em>both</em>:</p>
           <ol>
             <li><code>rerank_top1 ≥ -0.5</code> <em>and</em> <code>mean(top-3) ≥ -1.0</code></li>
-            <li>Top-5 chunks span ≤ 5 distinct documents (curriculum docs HT2020&ndash;HT2026 span sv + en easily)</li>
+            <li>Top-K chunks span ≤ 8 distinct documents (curriculum docs HT2020&ndash;HT2026 span sv + en easily)</li>
           </ol>
           <p style="margin-top: 0.6em;">Cross-encoder logits are unbounded and model-specific &mdash; tune via <code>eval/run_eval.py</code> after any change to embeddings, reranker, or corpus.</p>
+          <p style="margin-top: 0.4em;">A third threshold, <code>offtopic_top1_max = -3.0</code>, decides whether a refusal names the study counselor. Below it the question is plainly off-topic and the referral is dropped &mdash; no in-domain refusal in the eval set scores that low.</p>
         </div>
         <div>
           <div class="notebox">
