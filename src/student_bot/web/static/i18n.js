@@ -172,7 +172,9 @@
       "tabs.debug": "Så här tänkte boten",
 
       "debug.title": "Så här tänkte boten",
-      "debug.intro": "Här ser du vilka dokument retrieval hittade, vad spärren beslutade, samt vilken kontext som skickades till språkmodellen. Klicka på 🔍 vid ett svar för att se den turens detaljer.",
+      "debug.intro": "Här listas alla frågor du ställt i den här sessionen. Öppna en fråga för att se vilka dokument retrieval hittade, vad spärren beslutade och vilken kontext som skickades till språkmodellen.",
+      "debug.noturns": "Du har inte ställt någon fråga än i den här sessionen. Ställ en fråga i chatten, så dyker den upp här.",
+      "debug.msg.loading": "Hämtar detaljer …",
       "debug.empty": "Ingen diagnostikdata sparades för denna tur (du var avloggad eller en kortslutning skedde tidigt).",
       "debug.section.routing": "Routing",
       "debug.section.gate": "Spärr (gate)",
@@ -376,7 +378,9 @@
       "tabs.debug": "How the bot thought",
 
       "debug.title": "How the bot thought",
-      "debug.intro": "Here you can see which documents retrieval found, what the gate decided, and the exact context that was sent to the language model. Click the 🔍 next to a reply to see that turn's details.",
+      "debug.intro": "This lists every question you've asked in this session. Open one to see which documents retrieval found, what the gate decided, and the exact context that was sent to the language model.",
+      "debug.noturns": "You haven't asked anything yet in this session. Ask a question in the chat and it will show up here.",
+      "debug.msg.loading": "Loading details …",
       "debug.empty": "No debug data was saved for this turn (you were opted out or a short-circuit happened early).",
       "debug.section.routing": "Routing",
       "debug.section.gate": "Gate",

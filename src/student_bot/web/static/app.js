@@ -16,6 +16,10 @@ const state = {
   // Cached debug payloads keyed by qa_id. Populated from the SSE meta event
   // for fresh turns; older turns (within the session) are fetched on demand.
   debugCache: new Map(),
+  // Every answered turn this session, oldest first: {qaId, question, ts}.
+  // Drives the list in "Så här tänkte boten" (#92), which previously could
+  // only ever show the one turn whose 🔍 you last clicked.
+  turns: [],
   isAdmin: false,
 };
 localStorage.setItem("session_id", state.sessionId);
@@ -85,7 +89,12 @@ function syncTabBarVisibility() {
 }
 
 document.querySelectorAll(".view-tab").forEach((btn) => {
-  btn.addEventListener("click", () => setView(btn.dataset.view));
+  btn.addEventListener("click", () => {
+    setView(btn.dataset.view);
+    // Opening the tab on its own used to show whatever the last 🔍 had
+    // rendered, or nothing at all. It now lists the session (#92).
+    if (btn.dataset.view === "debug") renderDebugTurns();
+  });
 });
 
 if (el("#learn-more-chat")) {
@@ -150,6 +159,11 @@ el("#reset").addEventListener("click", async () => {
   }).catch(() => { });
   messages.innerHTML = "";
   state.thread = [];
+  // The debug list mirrors the transcript, so clearing one clears the other —
+  // otherwise "Börja om" leaves the previous conversation's turns listed.
+  state.turns = [];
+  state.debugCache.clear();
+  if (document.body.classList.contains("viewing-debug")) renderDebugTurns();
   refreshExportButton();
   statusEl.textContent = window.t ? window.t("chat.newthread") : "tråden rensad";
 });
@@ -179,6 +193,10 @@ composer.addEventListener("submit", async (e) => {
   refreshExportButton();
 
   const botMsg = appendBot();
+  // Carried so the debug list can label this turn with what was asked (#92).
+  // The qa_id only arrives later, in the meta event, by which point the
+  // question is no longer in scope where the turn gets recorded.
+  botMsg.question = q;
   const botEntry = {
     role: "bot",
     ts: Date.now(),
@@ -707,6 +725,17 @@ function decorateBot(botMsg, meta) {
   // Feedback buttons (only if we have a qa id).
   if (meta.qa_id) {
     botMsg.wrap.dataset.qaId = String(meta.qa_id);
+    const askedQuestion = (botMsg.question || "").trim();
+    if (!state.turns.some((x) => x.qaId === String(meta.qa_id))) {
+      state.turns.push({
+        qaId: String(meta.qa_id),
+        question: askedQuestion || "(?)",
+        ts: Date.now(),
+      });
+      // Keep the list live while it is on screen, so a question asked with the
+      // debug tab open appears without a manual switch.
+      if (document.body.classList.contains("viewing-debug")) renderDebugTurns();
+    }
     const actions = document.createElement("div");
     actions.className = "actions";
     const up = document.createElement("button");
@@ -1375,62 +1404,125 @@ const debugPanel = el("#debug-panel");
 const debugPanelBody = el("#debug-panel-body");
 const debugPanelEmpty = el("#debug-panel-empty");
 
-async function showDebugPanel(qaId) {
-  if (!debugPanel || !debugPanelBody) return;
-  setView("debug");
-  if (debugPanelEmpty) debugPanelEmpty.classList.add("hidden");
+// --- the session list (#92) ----------------------------------------------
+//
+// The panel used to render exactly one turn, whichever 🔍 you last clicked,
+// and opening the tab on its own showed nothing. So the only way to compare
+// two answers was to click 🔍, read, click back, click the other 🔍 — and
+// there was no way to see that a turn even had diagnostics without trying.
+//
+// Now the view lists every question asked this session, collapsed. Bodies are
+// fetched on first expand, not up front: a long session would otherwise fire a
+// request per turn to render a list of headings.
 
+function debugTurnBodyId(qaId) {
+  return `debug-body-${String(qaId).replace(/[^A-Za-z0-9_-]/g, "")}`;
+}
+
+async function loadDebugTurn(details) {
+  const qaId = details.dataset.qaId;
+  const body = details.querySelector(".debug-turn-body");
+  if (!body || details.dataset.loaded === "1") return;
+  details.dataset.loaded = "1";
+
+  const t = (k, fallback) => (window.t && window.t(k)) || fallback;
   let payload = state.debugCache.get(qaId);
+
   if (!payload) {
-    debugPanelBody.innerHTML =
-      `<p class="debug-loading">${escapeHtml(
-        (window.t && window.t("debug.msg.details")) || "Loading…"
-      )}</p>`;
+    body.innerHTML = `<p class="debug-loading">${escapeHtml(t("debug.msg.loading", "Loading…"))}</p>`;
     try {
       const url = new URL("api/debug/" + encodeURIComponent(qaId), location.href);
       url.searchParams.set("session_id", state.sessionId);
       if (state.name) url.searchParams.set("name", state.name);
       const resp = await fetch(url.toString(), { credentials: "include" });
       if (!resp.ok) {
-        // 404 = no qa_debug row (toggle was off for this turn, opted out,
-        // or guardrail short-circuit). Show the dedicated empty message
-        // rather than the generic error so the reason is obvious.
-        if (resp.status === 404) {
-          debugPanelBody.innerHTML = "";
-          if (debugPanelEmpty) debugPanelEmpty.classList.remove("hidden");
-          return;
-        }
-        const tpl =
-          (window.t && window.t("debug.fetch_error")) ||
-          "Could not load details (error {status}).";
-        debugPanelBody.innerHTML =
-          `<p class="debug-error">${escapeHtml(
-            tpl.replace("{status}", String(resp.status))
-          )}</p>`;
+        // 404 = no qa_debug row (toggle was off for this turn, opted out, or a
+        // guardrail short-circuit). That is a fact about the turn, not an
+        // error, so say which.
+        body.innerHTML = resp.status === 404
+          ? `<p class="debug-empty-inline">${escapeHtml(t("debug.empty", "No diagnostics for this turn."))}</p>`
+          : `<p class="debug-error">${escapeHtml(
+              t("debug.fetch_error", "Could not load details (error {status}).")
+                .replace("{status}", String(resp.status))
+            )}</p>`;
+        // Let a transient error be retried by collapsing and reopening.
+        if (resp.status !== 404) details.dataset.loaded = "";
         return;
       }
       const data = await resp.json();
       payload = data && data.payload;
       if (payload) state.debugCache.set(qaId, payload);
     } catch (e) {
-      const tpl =
-        (window.t && window.t("debug.fetch_error")) ||
-        "Could not load details (error {status}).";
-      debugPanelBody.innerHTML =
-        `<p class="debug-error">${escapeHtml(tpl.replace("{status}", e.message || "?"))}</p>`;
+      body.innerHTML = `<p class="debug-error">${escapeHtml(
+        t("debug.fetch_error", "Could not load details (error {status}).")
+          .replace("{status}", e.message || "?")
+      )}</p>`;
+      details.dataset.loaded = "";
       return;
     }
   }
 
-  if (!payload) {
-    debugPanelBody.innerHTML = "";
-    if (debugPanelEmpty) debugPanelEmpty.classList.remove("hidden");
-    return;
-  }
-  renderDebugPayload(payload, qaId);
+  body.innerHTML = payload
+    ? debugPayloadHtml(payload, qaId)
+    : `<p class="debug-empty-inline">${escapeHtml(t("debug.empty", "No diagnostics for this turn."))}</p>`;
 }
 
-function renderDebugPayload(payload, qaId) {
+function renderDebugTurns() {
+  if (!debugPanelBody) return;
+  const t = (k, fallback) => (window.t && window.t(k)) || fallback;
+
+  if (!state.turns.length) {
+    debugPanelBody.innerHTML = "";
+    if (debugPanelEmpty) {
+      debugPanelEmpty.textContent = t("debug.noturns", "Ask a question first.");
+      debugPanelEmpty.classList.remove("hidden");
+    }
+    return;
+  }
+  if (debugPanelEmpty) debugPanelEmpty.classList.add("hidden");
+
+  // Newest first: the turn you just asked about is the one you want, and it is
+  // otherwise at the bottom of a growing list.
+  const items = state.turns
+    .slice()
+    .reverse()
+    .map((turn, idx) => {
+      const n = state.turns.length - idx;
+      return (
+        `<details class="debug-turn" data-qa-id="${escapeHtml(String(turn.qaId))}">` +
+        `<summary class="debug-turn-head">` +
+        `<span class="debug-turn-n">${n}</span>` +
+        `<span class="debug-turn-q">${escapeHtml(turn.question)}</span>` +
+        `</summary>` +
+        `<div class="debug-turn-body" id="${debugTurnBodyId(turn.qaId)}"></div>` +
+        `</details>`
+      );
+    });
+  debugPanelBody.innerHTML = `<div class="debug-turns">${items.join("")}</div>`;
+
+  debugPanelBody.querySelectorAll(".debug-turn").forEach((details) => {
+    details.addEventListener("toggle", () => {
+      if (details.open) loadDebugTurn(details);
+    });
+  });
+}
+
+function showDebugPanel(qaId) {
+  if (!debugPanel || !debugPanelBody) return;
+  setView("debug");
+  renderDebugTurns();
+  if (!qaId) return;
+  const target = debugPanelBody.querySelector(
+    `.debug-turn[data-qa-id="${CSS.escape(String(qaId))}"]`
+  );
+  if (target) {
+    target.open = true;
+    loadDebugTurn(target);
+    target.scrollIntoView({ block: "nearest" });
+  }
+}
+
+function debugPayloadHtml(payload, qaId) {
   const t = window.t || ((k) => k);
   const sections = [];
 
@@ -1507,10 +1599,11 @@ function renderDebugPayload(payload, qaId) {
     )
   );
 
-  debugPanelBody.innerHTML =
+  return (
     `<div class="debug-meta"><span>qa_id: <code>${escapeHtml(
       String(qaId)
-    )}</code></span></div>` + sections.join("");
+    )}</code></span></div>` + sections.join("")
+  );
 }
 
 function debugSection(title, innerHtml) {
