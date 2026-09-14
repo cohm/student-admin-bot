@@ -2751,8 +2751,26 @@ def _is_contact_intent_question(question: str) -> bool:
     questions should bypass the dynamic_web programme-alias flow — which
     would otherwise hijack "Vem är programansvarig för teknisk fysik?"
     into "CTFYS or TTFYM?" → "HT-year?" and never reach retrieval.
+
+    `_CONTACT_INTENT_RE` lists role NOUNS, which misses the two shortest ways
+    to ask the same thing: the `PA` abbreviation, and a bare "vem är ansvarig
+    för CTFYS". Both were reaching the study-plan fetch, and its sections
+    outscore the programansvariga pages — measured on the live index, the page
+    that actually names the PA fell to rank 8 behind three syllabus chunks, so
+    the model answered that the context did not say. The same questions written
+    with the noun ("vem är programansvarig för …") were answered correctly,
+    which is what made this look like a name-vs-code problem.
+
+    `_ROLE_LOOKUP_RE` already recognises both forms — it was only wired to the
+    admission-year decision, not to this one.
     """
-    return bool(_CONTACT_INTENT_RE.search(question or ""))
+    text = question or ""
+    if _CONTACT_INTENT_RE.search(text):
+        return True
+    # A role question that also names a programme. The programme reference is
+    # what would trigger the study-plan fetch, and a syllabus never names its
+    # PA — so there is nothing for the fetch to contribute.
+    return bool(_ROLE_LOOKUP_RE.search(text) or _PA_ABBREV_RE.search(text))
 
 
 def maybe_fetch_dynamic_web(

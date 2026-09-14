@@ -362,3 +362,21 @@
   expected_doc_substring: "datateknik"
   notes: "Swedish counterpart. Before the programme pages this returned the school contact page."
 
+
+- question: "Vem är ansvarig för CTFYS?"
+  kind: in_domain
+  lang: sv
+  # The bare "ansvarig för <CODE>" form. It named a programme, so it triggered
+  # the study-plan fetch, whose sections outscored the programansvariga page
+  # and pushed it to rank 8 — the model then said the context did not say.
+  expected_any:
+    - "ansvariga-for-grundutbildningen-pa-sci"
+    - "programansvariga"
+
+- question: "Vem är PA för CTFYS?"
+  kind: in_domain
+  lang: sv
+  # Same failure via the PA abbreviation.
+  expected_any:
+    - "ansvariga-for-grundutbildningen-pa-sci"
+    - "programansvariga"
