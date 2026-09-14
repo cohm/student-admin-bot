@@ -8,6 +8,8 @@ Two independent matcher gaps, both reproduced from real answers:
 
 from __future__ import annotations
 
+import pytest
+
 from student_bot.bot.citations import apply_citation_numbering
 from student_bot.bot.retrieval import RetrievedChunk
 
@@ -120,3 +122,83 @@ def test_ordinary_bracketed_prose_is_untouched():
 def test_no_chunks_means_no_rewriting():
     body = "X [alfa 111]."
     assert apply_citation_numbering(body, [])[0] == body
+
+
+# --- the same ambiguity rule, in every fallback ---------------------------
+#
+# The title fallback was fixed in #125; the section and fuzzy fallbacks kept
+# requiring exactly one candidate. A one-character model typo
+# ("tillgodoraknande" -> "tillgodoraknander") whose section matched exactly
+# then fell through to raw text, because that document had two rows.
+
+
+def test_a_mistyped_title_resolves_via_its_section():
+    rows = [
+        chunk("tillgodoraknande", "Tillgodoräknande > Relaterade sidor", "a"),
+        chunk("tillgodoraknande", "Tillgodoräknande > Relaterade sidor", "b"),
+    ]
+    out, cited = apply_citation_numbering(
+        "Se [tillgodoraknander · Tillgodoräknande > Relaterade sidor].", rows
+    )
+    assert out.endswith("[1].")
+    assert len(cited) == 1
+
+
+def test_a_section_shared_by_two_documents_still_resolves():
+    """Best-ranked wins. Citing the top-scoring of two plausible documents
+    beats showing the student an unresolved tag."""
+    rows = [
+        chunk("alfa", "Gemensam sektion", "a"),
+        chunk("beta", "Gemensam sektion", "b"),
+    ]
+    out, _ = apply_citation_numbering("X [okänd titel · Gemensam sektion].", rows)
+    assert out == "X [1]."
+
+
+def test_fuzzy_title_match_survives_two_rows():
+    rows = [
+        chunk("tentamensregler", "Regler", "a"),
+        chunk("tentamensregler", "Anmälan", "b"),
+    ]
+    out, _ = apply_citation_numbering("X [tentamensregler:].", rows)
+    assert out == "X [1]."
+
+
+def test_a_genuinely_unknown_tag_is_still_left_alone():
+    """Loosening ambiguity must not become 'match anything'."""
+    rows = [chunk("alfa", "Sektion A", "a")]
+    body = "X [något helt annat · En sektion som inte finns]."
+    assert apply_citation_numbering(body, rows)[0] == body
+
+
+# --- the glossary is source material, not a document ----------------------
+#
+# Once the system prompt says the glossary may be used to answer, the model
+# cites it: "…har programkoden TTFYM [Ordlista]." There is no Sources row for
+# it, so the marker has to go.
+
+
+@pytest.mark.parametrize(
+    "body,expected",
+    [
+        ("Koden är TTFYM [Ordlista].", "Koden är TTFYM."),
+        ("Code is TTFYM [Glossary].", "Code is TTFYM."),
+        ("Koden är TTFYM [ordlista].", "Koden är TTFYM."),
+    ],
+)
+def test_the_glossary_marker_is_removed_without_leaving_a_gap(body, expected):
+    rows = [chunk("alfa", "S", "a")]
+    assert apply_citation_numbering(body, rows)[0] == expected
+
+
+def test_removing_it_does_not_reflow_markdown():
+    """Repairing the gap afterwards also collapsed list indentation."""
+    rows = [chunk("alfa", "S", "a")]
+    out, _ = apply_citation_numbering("Rad ett [Ordlista]\n\n*   Punkt [alfa · S]", rows)
+    assert out == "Rad ett\n\n*   Punkt [1]"
+
+
+def test_the_word_in_ordinary_prose_is_untouched():
+    rows = [chunk("alfa", "S", "a")]
+    out, _ = apply_citation_numbering("Ordet ordlista i text [alfa · S].", rows)
+    assert out == "Ordet ordlista i text [1]."
