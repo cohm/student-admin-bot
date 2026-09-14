@@ -959,7 +959,12 @@ def answer(
         # question is genuinely off-topic). If the LLM itself is
         # unreachable we surface a service-unavailable error rather than
         # a refusal — refusing would mis-attribute an outage to scope.
-        meta_messages = compose_meta_fallback_messages(cfg, lang, history_for_llm, expanded_q)
+        # The same off-topic test that decides the canned refusal's wording,
+        # applied to the prompt that actually produces the answer here (#84).
+        offer_counselor = not question_is_offtopic(cfg, gate.top1)
+        meta_messages = compose_meta_fallback_messages(
+            cfg, lang, history_for_llm, expanded_q, offer_counselor=offer_counselor
+        )
         if jargon_note and cfg.jargon.show_transparency_note:
             _emit_jargon_prefix(jargon_note, on_jargon_prefix, on_token)
         body = ""
@@ -998,9 +1003,7 @@ def answer(
             body = (
                 llm_unavailable_message(lang)
                 if llm_error
-                else refusal_message(
-                    cfg, lang, offer_counselor=not question_is_offtopic(cfg, gate.top1)
-                )
+                else refusal_message(cfg, lang, offer_counselor=offer_counselor)
             )
             if on_token:
                 on_token(body)
