@@ -383,7 +383,17 @@ def apply_citation_numbering(
         sep = content.find(" · ")
         title = (content[:sep] if sep > -1 else content).strip()
         candidates = by_title.get(title) or by_title_norm.get(_normalize_citation(title), [])
-        if len(candidates) == 1:
+        if candidates:
+            # Take the best-ranked row rather than giving up on ambiguity.
+            # Requiring len == 1 here meant a bare-title citation failed
+            # whenever the SAME document contributed two or more rows to the
+            # top-K — which is the normal case for a long page with several
+            # sections, not an edge case. The tag then survived into the answer
+            # as raw text, e.g. "[teknisk fysik 1ecfccae57]".
+            #
+            # Rows are in rerank order, so candidates[0] is that document's
+            # best-scoring section. Citing the right document at a plausible
+            # section beats showing the reader a hash.
             return candidates[0]
         # Section-only unique: if the LLM dropped the title but the tail
         # uniquely identifies a registered section, accept the match.
@@ -415,9 +425,25 @@ def apply_citation_numbering(
     def _replace(m: re.Match) -> str:
         content = m.group(1).strip()
         idx = _match(content, allow_title_only=True)
-        if idx is None:
-            return m.group(0)
-        return f"[{_assign(idx)}]"
+        if idx is not None:
+            return f"[{_assign(idx)}]"
+
+        # A single bracket can hold several tags: asked to list 19 programmes,
+        # the model emitted "[tag-a, tag-b, tag-c, tag-d, tag-e]" after every
+        # line. Treated as one tag it matches nothing and the whole list lands
+        # in the answer as raw text. Split on commas and map each, but only if
+        # EVERY part resolves — a partial match would silently drop citations,
+        # and an ordinary parenthetical containing a comma must stay untouched.
+        parts = [p.strip() for p in content.split(",")]
+        if len(parts) > 1 and all(parts):
+            idxs = [_match(p, allow_title_only=True) for p in parts]
+            if all(i is not None for i in idxs):
+                seen: list[int] = []
+                for i in idxs:
+                    if i not in seen:
+                        seen.append(i)
+                return "".join(f"[{_assign(i)}]" for i in seen)
+        return m.group(0)
 
     def _replace_parens(m: re.Match) -> str:
         content = m.group(1).strip()
