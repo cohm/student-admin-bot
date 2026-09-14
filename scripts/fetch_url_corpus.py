@@ -469,6 +469,89 @@ def _record_skip_reason(
         bucket["samples"].append(url)
 
 
+PROGRAMME_INDEX_URL = "https://www.kth.se/student/kurser/kurser-inom-program"
+PROGRAMME_INDEX_REL = "programoversikt-koder.md"
+
+
+def _write_programme_code_index(cfg, docs_root: Path, output_dir_abs: Path) -> dict | None:
+    """Render KTH's programme name/code table as a corpus document.
+
+    The page at PROGRAMME_INDEX_URL is a JavaScript application: scraping its
+    HTML yields eleven lines and not one programme code, which is why asking
+    "what is the programme code for X?" had no document to cite and depended
+    entirely on the prompt glossary. The data is there — the page ships it in
+    an embedded JSON store, which `_parse_program_aliases_from_store` already
+    reads to build the routing alias table.
+
+    This writes the same 300-odd programmes out as markdown, so retrieval can
+    find them and an answer can cite a source rather than asserting a code
+    from a glossary line with no reference.
+    """
+    from student_bot.bot.web_retrieval import _get_program_aliases
+
+    try:
+        aliases = _get_program_aliases(cfg)
+    except Exception as e:
+        click.echo(f"  programme index: alias fetch failed ({e}); skipped")
+        return None
+    if not aliases:
+        click.echo("  programme index: alias table empty; skipped")
+        return None
+
+    # {CODE: [names]} — the table holds several aliases per code (Swedish name,
+    # English name, the code itself). Drop the code-as-alias and keep the rest,
+    # longest first so the official name leads.
+    by_code: dict[str, list[str]] = {}
+    for alias, code in aliases.items():
+        code_up = str(code).upper()
+        if alias.strip().upper() == code_up:
+            continue
+        by_code.setdefault(code_up, []).append(alias.strip())
+    if not by_code:
+        return None
+
+    lines = [
+        "# Programkoder vid KTH",
+        "",
+        "Programkod och programnamn för KTH:s utbildningsprogram, från KTH:s",
+        "kurs- och programkatalog. Namnen finns på svenska och engelska.",
+        "",
+        "| Programkod | Programnamn |",
+        "|---|---|",
+    ]
+    for code in sorted(by_code):
+        names = sorted(dict.fromkeys(by_code[code]), key=len, reverse=True)
+        lines.append(f"| {code} | {' / '.join(names)} |")
+    body_md = "\n".join(lines)
+
+    rel_source = str((output_dir_abs.relative_to(docs_root)) / "www.kth.se" / PROGRAMME_INDEX_REL)
+    out_path = docs_root / rel_source
+    out_path.parent.mkdir(parents=True, exist_ok=True)
+    fetched_at = int(time.time())
+    out_path.write_text(
+        _render_md(
+            source_url=PROGRAMME_INDEX_URL,
+            canonical_url=PROGRAMME_INDEX_URL,
+            fetched_at=fetched_at,
+            title="Programkoder vid KTH",
+            content_type="text/html",
+            body_md=body_md,
+            vetted_links=[],
+        ),
+        encoding="utf-8",
+    )
+    click.echo(f"  programme index: {len(by_code)} programmes -> {rel_source}")
+    return {
+        rel_source: {
+            "source_url": PROGRAMME_INDEX_URL,
+            "canonical_url": PROGRAMME_INDEX_URL,
+            "fetched_at": fetched_at,
+            "title": "Programkoder vid KTH",
+            "content_type": "text/html",
+        }
+    }
+
+
 @click.command()
 @click.option("--limit-seeds", type=int, default=None, help="Process at most N manifest entries.")
 def main(limit_seeds: int | None) -> None:
@@ -633,6 +716,13 @@ def main(limit_seeds: int | None) -> None:
                 for link in links:
                     if link not in seen and _matches_policy(link, seed):
                         q.append((link, depth + 1))
+
+    # The programme code table cannot be scraped from HTML (the page is a JS
+    # app); render it from the same JSON store the router already reads.
+    extra = _write_programme_code_index(cfg, docs_root, output_dir_abs)
+    if extra:
+        source_map.update(extra)
+        written += 1
 
     source_map_path = cfg.absolute(Path(cfg.url_ingest.source_map_file))
     _write_source_map(source_map_path, source_map)

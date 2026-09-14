@@ -114,3 +114,59 @@ def test_the_retrieval_query_is_deliberately_NOT_language_matched(cfg):
 def test_a_missing_language_falls_back_rather_than_dropping_the_code(cfg):
     """A code whose aliases give no language signal must still be named."""
     assert _resolve_program_codes(cfg, "CTFYS", "de")["CTFYS"]
+
+
+# --- English name collisions ---------------------------------------------
+#
+# "engineering physics" is the English name of BOTH the civilingenjör
+# programme (CTFYS) and the master's (TTFYM), so the router scored them equal
+# and picked neither. Swedish has no such clash — "civilingenjörsutbildning i
+# teknisk fysik" and "masterprogram, teknisk fysik" share no distinguishing
+# token — which is why this only ever failed in English.
+
+
+@pytest.mark.parametrize(
+    "question,expected",
+    [
+        ("What is the programme code for the master's in engineering physics?", {"master"}),
+        ("Which master's programme covers engineering physics?", {"master"}),
+        ("I want a masters in applied mathematics", {"master"}),
+        ("Vad har masterprogrammet i teknisk fysik för programkod?", {"master"}),
+    ],
+)
+def test_the_masters_level_is_recognised(question, expected):
+    from student_bot.bot.web_retrieval import _level_prior_from_question
+
+    assert _level_prior_from_question(question) == expected
+
+
+@pytest.mark.parametrize(
+    "question",
+    [
+        # A bare "master" is not a level signal: this is a corpus question about
+        # examensarbete, and a master-level programme prior would steer it at a
+        # programme page instead.
+        "How long do I have to finish a master thesis?",
+        "Hur lång tid har jag på mig att slutföra ett examensarbete?",
+    ],
+)
+def test_a_bare_master_is_not_a_level_signal(question):
+    from student_bot.bot.web_retrieval import _level_prior_from_question
+
+    assert _level_prior_from_question(question) is None
+
+
+def test_the_english_collision_now_resolves(cfg):
+    candidates, _ = _extract_program_candidates(
+        "What is the programme code for the master's in engineering physics?", cfg
+    )
+    assert [c.code for c in candidates] == ["TTFYM"]
+
+
+def test_an_ambiguous_question_stays_ambiguous(cfg):
+    """Without a level word both programmes are genuinely plausible, and the
+    right behaviour is to ask — not to guess."""
+    candidates, _ = _extract_program_candidates(
+        "What is the programme code for engineering physics?", cfg
+    )
+    assert {c.code for c in candidates} == {"CTFYS", "TTFYM"}

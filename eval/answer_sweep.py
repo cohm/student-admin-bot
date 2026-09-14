@@ -192,6 +192,13 @@ CASES: list[Case] = [
         "#85 name -> code",
         _names("CTFYS"),
     ),
+    Case(
+        "code-en",
+        "glossary",
+        "What is the programme code for the master's in engineering physics?",
+        "English collision: 'engineering physics' is both CTFYS and TTFYM",
+        _names("TTFYM"),
+    ),
     # --- refusals (#84, #127) -----------------------------------------------
     Case(
         "offtopic-sv",
