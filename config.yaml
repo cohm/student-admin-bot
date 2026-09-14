@@ -61,7 +61,14 @@ llm:
   # FIRST slash — Ollama tags use `:` and Berget/HF model IDs use additional
   # `/`, so first-slash splitting handles both. Switch models by changing
   # this one field, or override via `LLM_ACTIVE` in `.env`.
-  active: litellm/gemma4-31b-mtp
+  #
+  # This is what prod has actually been running since 2026-09-10, via an
+  # LLM_ACTIVE override in its .env. Leaving the committed default on
+  # gemma4-31b-mtp meant the repo, the talk deck and the running system
+  # disagreed, and that a lost .env line would have silently swapped the model
+  # rather than failed. ~3x prefill and ~2x decode over the dense 31b,
+  # size-adjusted (see docs/slides and the model table below).
+  active: litellm/gemma4-26b-a4b
 
   # Backends. Each entry declares how to reach a hosting service. Multiple
   # models can share one provider — Berget hosts dozens of models behind
