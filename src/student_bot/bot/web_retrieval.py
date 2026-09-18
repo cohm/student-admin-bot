@@ -165,7 +165,7 @@ def _parse_programme_year_level(q: str) -> int | None:
     if not q:
         return None
 
-    m = re.search(r"\b(?:årskurs|arskurs|år|ar|year)\s*([1-9])\b", q, re.I)
+    m = re.search(r"\b(?:årskurs|arskurs|åk|ak|år|ar|year)\s*([1-9])\b", q, re.I)
     if m:
         return int(m.group(1))
 
@@ -222,7 +222,42 @@ _MASTER_TOKEN_RE = re.compile(
     re.IGNORECASE,
 )
 _ELIGIBILITY_TOKEN_RE = re.compile(
-    r"\b(?:behörig\w*|behorig\w*|krav|krävs|kravs|eligib\w*|requirement\w*|qualify\w*|qualif\w*)\b",
+    r"\b(?:behörig\w*|behorig\w*|krav|krävs|kravs|eligib\w*|requirement\w*|qualify\w*|qualif\w*|"
+    r"förkunskap\w*|forkunskap\w*|prerequisite\w*)\b",
+    re.IGNORECASE,
+)
+# "Vilka kurser i ÅK2 kan jag fortfarande läsa?"-shaped questions ask about
+# eligibility without ever using an explicit eligibility word (see
+# `_ELIGIBILITY_TOKEN_RE`) — this is trigger B's alternative condition (v2
+# prereq-data implementation plan, Designbeslut punkt 1B). Also covers
+# "vilka kurser låser X upp?" (kept here, rather than added to
+# `_ELIGIBILITY_TOKEN_RE`, per the implementation decision on that plan's
+# open question 1: "låser upp" only needs to drive this trigger, not the
+# eligibility-word-plus-course-context branch).
+_ELIGIBILITY_INTENT_RE = re.compile(
+    r"\b(?:"
+    r"vilka kurser (?:kan|får) jag|"
+    r"vad kan jag (?:läsa|ta|gå)|"
+    r"kan jag (?:fortfarande |ännu |ändå )?(?:läsa|ta|gå vidare)|"
+    r"vilka kurser (?:är|blir) jag behörig|"
+    r"vilka kurser[^.?!]{0,40}låser[^.?!]{0,20}upp|"
+    # "vad krävs för att läsa <smeknamn, utan kurskod eller 'kurs'-ord>?" —
+    # the verb (läsa/ta) is itself a course-context signal, distinct from
+    # an admission question ("vad krävs för att BLI ANTAGEN till CTFYS?"),
+    # which uses a different verb and must NOT trigger this. Deliberately
+    # excludes "gå" here (unlike the pre-existing "vad kan jag läsa/ta/gå"
+    # alternative above): "gå" alone is too generic — "vad krävs för att
+    # gå ut gymnasiet/gå med i studentkåren/gå på studievägledning" all
+    # over-triggered in exploratory testing before this exclusion.
+    r"vad (?:krävs|kravs) för att (?:läsa|ta)|"
+    r"which courses can i (?:still )?take|"
+    r"what can i (?:still )?take|"
+    r"am i eligible for|"
+    r"which courses[^.?!]{0,40}unlocks?|"
+    r"can i (?:still )?take|"
+    r"what (?:is|are) required to (?:take|study)|"
+    r"what do i need to (?:take|study)"
+    r")\b",
     re.IGNORECASE,
 )
 _COURSE_LISTING_RE = re.compile(
@@ -257,6 +292,69 @@ def _question_is_master_eligibility(q: str) -> bool:
     if _MASTER_TOKEN_RE.search(text) and _ELIGIBILITY_TOKEN_RE.search(text):
         return True
     return False
+
+
+def _question_is_prereq_eligibility_shaped(q: str) -> bool:
+    """Trigger B (v2 prereq-data implementation plan, Designbeslut punkt
+    1B): an eligibility/prerequisite question naming a course, or asking
+    which courses are/aren't open to the student — as opposed to trigger A
+    (`program_study_intent_question`), a plain course-listing/study-plan
+    question that the existing dynamic-web programme clarification already
+    handles unmodified. Kept separate from `question_needs_prereq_context`
+    so callers that only care about the *new* behaviour (asking for
+    programme/cohort before answering from `bot/prereq_data.py`) don't also
+    pick up trigger-A-only questions, which that plan's Designbeslut punkt 4
+    says should keep going through the existing path unless proven
+    otherwise by an empirical/eval test.
+
+    Also excludes a master-eligibility-shaped question ("vilka kurser
+    behöver jag för att bli behörig till masterprogrammet i matematik?") —
+    `_question_is_master_eligibility` is a more specific, already-correct
+    existing mechanism for exactly that shape (it asks for the student's
+    *civilingenjör* programme and routes to the civ-eng study-plan page's
+    "mappade masterprogram" data, which `bot/prereq_data.py` does not have
+    at all). Regression found via the sample50 eval sweep: without this
+    exclusion, el-3 lost its correct, targeted clarification to this
+    trigger's generic "which programme/year" one.
+    """
+    if not q:
+        return False
+    if _question_is_master_eligibility(q):
+        return False
+    from student_bot.bot.course_resolver import question_has_course_intent
+
+    has_course_context = (
+        bool(_COURSE_CODE_RE.search(q))
+        or question_has_course_intent(q)
+        or bool(_COURSE_LISTING_RE.search(q))
+    )
+    if _ELIGIBILITY_TOKEN_RE.search(q) and has_course_context:
+        return True
+    return bool(_ELIGIBILITY_INTENT_RE.search(q))
+
+
+def question_needs_prereq_context(q: str) -> bool:
+    """True when the question needs programme (and, where it varies by
+    admission cohort, admission-year) context resolved before it can be
+    answered — see Designbeslut punkt 1 in the v2 prereq-data
+    implementation plan. The OR of the already-existing trigger A
+    (`program_study_intent_question` — course-listing/study-plan questions,
+    already handled by the existing dynamic-web programme clarification)
+    and the new trigger B (`_question_is_prereq_eligibility_shaped`).
+
+    Note: a pure course-listing question that names a programme only by its
+    bare code and no other keyword (e.g. "vilka kurser ingår i CTFYS") is
+    already routed correctly end-to-end today, but via a broader check
+    inside `_extract_targets_with_cfg` (`_PROGRAM_CODE_RE.search(...)`) —
+    not via `program_study_intent_question` itself. That broader check is
+    deliberately NOT folded in here: it would also fire on a question with
+    no course angle at all (e.g. "vad krävs för att bli antagen till
+    CTFYS?", a registration/admission question), which the v2 plan's own
+    Designbeslut punkt 1 explicitly says must NOT trigger this.
+    """
+    if not q:
+        return False
+    return program_study_intent_question(q) or _question_is_prereq_eligibility_shaped(q)
 
 
 # Heuristic: codes assigned to civilingenjör programmes in the KTH alias
@@ -398,8 +496,13 @@ def parse_program_admission_hints(q: str) -> AdmissionHints:
             return AdmissionHints(year_prefix=m.group(1))
 
     # Conversational cohort replies (e.g. after bot asked for admission round).
+    # "antagningsomgång" is worth including on its own merit — it's the exact
+    # term the bot's own clarification question uses ("vilken
+    # antagningsomgång som gäller"), so a student is likely to echo it back
+    # or state it proactively before ever being asked.
     if re.search(
-        r"\b(?:började|startade|påbörjade|påbörjat|antagen|antagna|intagen)\b",
+        r"\b(?:började|startade|påbörjade|påbörjat|antagen|antagna|intagen|"
+        r"antagningsomgång|antagningsomgangen|antagningsomgang)\b",
         q,
         re.I,
     ):
@@ -445,10 +548,49 @@ def is_multi_program_clarification_assistant_message(content: str) -> bool:
     return "ditt program är inte entydigt" in c or "your program reference is ambiguous" in c
 
 
+def bilingual_no_program_clarification() -> tuple[str, str]:
+    """The bot's open 'which programme do you study?' question — used when
+    a prerequisite/eligibility question (see `question_needs_prereq_context`)
+    names no programme at all, so there is nothing yet to list candidates
+    from (contrast `_build_multi_program_clarification`, used once there
+    are candidates to pick between). Asks for the admission round in the
+    same breath: per the v2 prereq-data implementation plan's resolution of
+    its open question 2, when neither programme nor admission year are
+    known, both are asked for in one turn rather than two."""
+    # Deliberately avoids the words "antagningsomgång"/"admission round" —
+    # those are what `is_programme_clarification_assistant_message` keys on,
+    # and this message needs its own, distinct detector (see
+    # `is_no_program_clarification_assistant_message`) so a reply to it is
+    # fused as an *open* pick, not folded into that other clarification's
+    # (year-only) fuse rule.
+    sv = (
+        "För att svara på frågor om förkunskapskrav och kursutbud behöver jag "
+        "veta vilket **program** du läser, och vilket år du blev antagen "
+        "(t.ex. HT2024). Vilket program läser du, och vilket år antogs du?"
+    )
+    en = (
+        "To answer questions about prerequisites and course offerings I need "
+        "to know which **programme** you study, and what year you were "
+        "admitted (e.g. HT2024). Which programme do you study, and what "
+        "year were you admitted?"
+    )
+    return sv, en
+
+
+def is_no_program_clarification_assistant_message(content: str) -> bool:
+    """True if this assistant text is our open 'which programme do you
+    study?' question (no candidate list — contrast
+    `is_multi_program_clarification_assistant_message`)."""
+    c = (content or "").lower()
+    return "vilket program läser du" in c or "which programme do you study" in c
+
+
 def _is_clarification_followup_anchor(content: str) -> bool:
-    return is_programme_clarification_assistant_message(
-        content
-    ) or is_multi_program_clarification_assistant_message(content)
+    return (
+        is_programme_clarification_assistant_message(content)
+        or is_multi_program_clarification_assistant_message(content)
+        or is_no_program_clarification_assistant_message(content)
+    )
 
 
 def merge_programme_clarification_followup(
@@ -464,7 +606,8 @@ def merge_programme_clarification_followup(
     last_content = last.get("content", "")
     is_round = is_programme_clarification_assistant_message(last_content)
     is_pick = is_multi_program_clarification_assistant_message(last_content)
-    if not (is_round or is_pick):
+    is_open = is_no_program_clarification_assistant_message(last_content)
+    if not (is_round or is_pick or is_open):
         return question
 
     qstrip = question.strip()
@@ -473,7 +616,7 @@ def merge_programme_clarification_followup(
         bare_year = bool(re.fullmatch(r"20\d{2}", qstrip))
         if not (hints.exact_term or hints.year_prefix or bare_year):
             return question
-    else:
+    elif is_pick:
         # Program pick: require either a 5-letter code or an explicit "I mean X"
         # / "jag menar X" anchor. A bare short message could just be a topic
         # shift, so we don't fuse on length alone.
@@ -495,6 +638,24 @@ def merge_programme_clarification_followup(
         )
         if not (has_code or has_pick_anchor):
             return question
+    else:
+        # Open "which programme do you study?" question: no candidate list
+        # was shown, so the reply could be a bare code, a colloquial
+        # programme name/nickname ("teknisk fysik"), or (rarely) an
+        # unrelated follow-up. Reuse the same candidate scorer the rest of
+        # the dynamic-web programme resolution uses, rather than requiring
+        # a literal 5-letter code, so a colloquial reply still fuses.
+        has_candidate = False
+        if cfg is not None:
+            try:
+                candidates, verbatim = _extract_program_candidates(qstrip, cfg)
+                has_candidate = bool(candidates or verbatim)
+            except Exception:
+                has_candidate = False
+        if not has_candidate:
+            has_candidate = bool(_PROGRAM_CODE_RE.search(qstrip))
+        if not has_candidate:
+            return question
 
     prev_user = ""
     for entry in reversed(hist[:-1]):
@@ -504,10 +665,8 @@ def merge_programme_clarification_followup(
     if not prev_user:
         return question
     merged = f"{prev_user}\n\n{qstrip}"
-    log.info(
-        "dynamic-web: merged %s clarification follow-up with prior user question",
-        "admission-round" if is_round else "program-pick",
-    )
+    kind = "admission-round" if is_round else "program-pick" if is_pick else "open-program"
+    log.info("dynamic-web: merged %s clarification follow-up with prior user question", kind)
     return merged
 
 

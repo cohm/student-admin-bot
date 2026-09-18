@@ -371,3 +371,10 @@ url_ingest:
     - canvas.kth.se
   global_link_blocklist_url_patterns: []
   filtered_links_report_file: data/url_filtered_links_report.json
+
+# Curated KTH study-plan prerequisite data (see bot/prereq_data.py). A
+# one-time, manually maintained copy — not produced or refreshed by this
+# repo's code.
+prereq_data:
+  enabled: yes
+  data_dir: data/studieplaner

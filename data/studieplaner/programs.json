@@ -1,0 +1,137 @@
+[
+  {
+    "code": "CTFYS",
+    "name": "Civilingenjörsutbildning i Teknisk fysik",
+    "nameEn": "Degree Program in Engineering Physics",
+    "dataFile": "CTFYS.json",
+    "cosmeticsFile": "CTFYS-cosmetics.json",
+    "verified": true,
+    "comment": "Utbildningsplanen verifierad av programansvarig Christian Ohm i november 2025",
+    "commentEn": "Study plan verified by program director Christian Ohm in November 2025",
+    "studyplan": "https://www.kth.se/student/kurser/program/CTFYS"
+  },
+  {
+    "code": "CTMAT",
+    "name": "Civilingenjörsutbildning i Teknisk matematik",
+    "nameEn": "Degree Program in Engineering Mathematics",
+    "dataFile": "CTMAT.json",
+    "cosmeticsFile": "CTMAT-cosmetics.json",
+    "verified": false,
+    "comment": "Utbildningsplanen är ännu inte verifierad - använd med försiktighet!",
+    "commentEn": "Study plan not yet verified — use with caution!",
+    "studyplan": "https://www.kth.se/student/kurser/program/CTMAT"
+  },
+  {
+    "code": "CFATE",
+    "name": "Civilingenjörsutbildning i Farkostteknik",
+    "nameEn": "Degree Program in Vehicle Engineering",
+    "dataFile": "CFATE.json",
+    "cosmeticsFile": "CFATE-cosmetics.json",
+    "verified": false,
+    "comment": "Utbildningsplanen är ännu inte verifierad - använd med försiktighet!",
+    "commentEn": "Study plan not yet verified — use with caution!",
+    "studyplan": "https://www.kth.se/student/kurser/program/CFATE"
+  }
+  ,
+  {
+    "code": "COPEN",
+    "name": "Civilingenjörsutbildning Öppen ingång",
+    "nameEn": "Degree Program in Engineering - Open Entrance",
+    "dataFile": "COPEN.json",
+    "cosmeticsFile": "COPEN-cosmetics.json",
+    "verified": true,
+    "comment": "Utbildningsplanen verifierad av programansvarig Jonas Sellberg den 2 september 2026",
+    "commentEn": "Study plan verified by program director Jonas Sellberg on 2 September 2026",
+    "studyplan": "https://www.kth.se/student/kurser/program/COPEN"
+  },
+  {
+    "code": "CINEK",
+    "name": "Civilingenjörsutbildning i Industriell ekonomi",
+    "nameEn": "Degree Program in Industrial Engineering and Management",
+    "dataFile": "CINEK.json",
+    "cosmeticsFile": "CINEK-cosmetics.json",
+    "verified": false,
+    "comment": "Hämtad automatiskt från KTH studiehandbok 2024-cohort, ej manuellt verifierad. Y4-Y5 ligger i masterprogrammen och visas inte här.",
+    "commentEn": "Auto-scraped from the KTH study handbook (2024 cohort), not manually verified. Y4-Y5 live in the master programmes and are not shown here.",
+    "studyplan": "https://www.kth.se/student/kurser/program/CINEK",
+    "specializations": [
+      { "code": "DTOI", "name": "Datateknik", "nameEn": "Computer Technology" },
+      { "code": "TMAI", "name": "Tillämpad matematik", "nameEn": "Applied Mathematics" },
+      { "code": "EHUI", "name": "Energisystem och hållbar utveckling", "nameEn": "Energy Systems and Sustainable Development" },
+      { "code": "PPUI", "name": "Produkt- och produktionsutveckling", "nameEn": "Product and Production Development" }
+    ]
+  },
+  {
+    "code": "TIEMM",
+    "name": "Masterprogram, industriell ekonomi",
+    "nameEn": "Master's Programme, Industrial Engineering and Management",
+    "dataFile": "TIEMM.json",
+    "cosmeticsFile": "TIEMM-cosmetics.json",
+    "verified": false,
+    "disabled": true,
+    "comment": "Masterprogram (motsvarar år 4-5 av civilingenjörsprogrammet CINEK). Hämtad automatiskt från KTH studiehandbok 2024-cohort, ej manuellt verifierad. Spår modelleras tills vidare som specializations i samma fält.",
+    "commentEn": "Master programme (corresponds to year 4-5 of the CINEK degree program). Auto-scraped from the KTH study handbook (2024 cohort), not manually verified. Tracks (spår) are temporarily modelled in the same `specializations` field.",
+    "studyplan": "https://www.kth.se/student/kurser/program/TIEMM",
+    "specializations": [
+      { "code": "CYPS", "name": "Spår, Cyberfysiska system", "nameEn": "Track, Cyber-Physical Systems" },
+      { "code": "EEAA", "name": "Spår, effektiv energianvändning", "nameEn": "Track, Efficient Energy Use" },
+      { "code": "FMIB", "name": "Spår, finansiell matematik", "nameEn": "Track, Financial Mathematics" },
+      { "code": "HKPA", "name": "Spår, hållbar kraftproduktion", "nameEn": "Track, Sustainable Power Production" },
+      { "code": "IAVN", "name": "Spår, interaktion och visualisering", "nameEn": "Track, Interaction and Visualisation" },
+      { "code": "MAIG", "name": "Spår, maskininlärning", "nameEn": "Track, Machine Learning" },
+      { "code": "MOPR", "name": "Spår, Modern produktion", "nameEn": "Track, Modern Production" },
+      { "code": "OSYT", "name": "Spår, optimeringslära och systemteori", "nameEn": "Track, Optimisation and Systems Theory" },
+      { "code": "PUET", "name": "Spår, programutvecklingsteknik", "nameEn": "Track, Software Engineering" }
+    ]
+  },
+  {
+    "code": "CMAST",
+    "name": "Civilingenjörsutbildning i maskinteknik",
+    "nameEn": "Degree Programme in Mechanical Engineering",
+    "dataFile": "cohorts/CMAST-HT2025.json",
+    "cosmeticsFile": "CMAST-cosmetics.json",
+    "verified": false,
+    "comment": "Helt automatiskt extraherad, aldrig verifierad. Standardvyn visar kullen HT2025; välj antagningsår för andra kullar.",
+    "commentEn": "Fully auto-extracted, never verified. The default view shows the HT2025 cohort; pick an admission year for others.",
+    "studyplan": "https://www.kth.se/student/kurser/program/CMAST",
+    "specializations": [
+      { "code": "INTF", "name": "Internationell inriktning, franska", "nameEn": "International Profile, french" },
+      { "code": "INTS", "name": "Internationell inriktning, spanska", "nameEn": "International Profile, spanish" },
+      { "code": "INTT", "name": "Internationell inriktning, tyska", "nameEn": "International Profile, german" }
+    ]
+  },
+  {
+    "code": "CMATD",
+    "name": "Civilingenjörsutbildning i materialdesign",
+    "nameEn": "Degree Programme in Materials Design and Engineering",
+    "dataFile": "cohorts/CMATD-HT2025.json",
+    "cosmeticsFile": "CMATD-cosmetics.json",
+    "verified": false,
+    "comment": "Helt automatiskt extraherad, aldrig verifierad. Standardvyn visar kullen HT2025; välj antagningsår för andra kullar.",
+    "commentEn": "Fully auto-extracted, never verified. The default view shows the HT2025 cohort; pick an admission year for others.",
+    "studyplan": "https://www.kth.se/student/kurser/program/CMATD"
+  }
+  ,
+  {
+    "code": "CELTE",
+    "name": "Civilingenjörsutbildning i elektroteknik",
+    "nameEn": "Degree Program in Electrical Engineering",
+    "dataFile": "cohorts/CELTE-HT2025.json",
+    "cosmeticsFile": "CELTE-cosmetics.json",
+    "verified": false,
+    "comment": "Utbildningsplanen är ännu inte verifierad - använd med försiktighet! Extraherad medan KOPPS låg nere, så engelska kursnamn saknas för kurser som inte finns i andra program.",
+    "commentEn": "Study plan not yet verified — use with caution! Extracted while KOPPS was down, so English course titles are missing for courses not shared with other programmes.",
+    "studyplan": "https://www.kth.se/student/kurser/program/CELTE"
+  },
+  {
+    "code": "CDATE",
+    "name": "Civilingenjörsutbildning i datateknik",
+    "nameEn": "Degree Program in Computer Science and Engineering",
+    "dataFile": "cohorts/CDATE-HT2025.json",
+    "cosmeticsFile": "CDATE-cosmetics.json",
+    "verified": false,
+    "comment": "Utbildningsplanen är ännu inte verifierad - använd med försiktighet! Extraherad medan KOPPS låg nere, så engelska kursnamn saknas för kurser som inte finns i andra program.",
+    "commentEn": "Study plan not yet verified — use with caution! Extracted while KOPPS was down, so English course titles are missing for courses not shared with other programmes.",
+    "studyplan": "https://www.kth.se/student/kurser/program/CDATE"
+  }
+]

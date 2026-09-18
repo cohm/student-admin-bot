@@ -1,0 +1,158 @@
+[
+  {
+    "code": "SA1007",
+    "name": "Ingenjörsrollen och ingenjörskunskap",
+    "nameEn": "Engineering Skills",
+    "totalCredits": 6,
+    "periodCredits": {
+      "P1": 1,
+      "P2": 0.5,
+      "P3": 1.5,
+      "P4": 3
+    },
+    "year": 1,
+    "prerequisites": [],
+    "exams": []
+  },
+  {
+    "code": "DD1310",
+    "name": "Programmeringsteknik",
+    "nameEn": "Programming Techniques",
+    "totalCredits": 6,
+    "periodCredits": {
+      "P1": 3,
+      "P2": 3,
+      "P3": 0,
+      "P4": 0
+    },
+    "year": 1,
+    "prerequisites": [],
+    "exams": []
+  },
+  {
+    "code": "SK1115",
+    "name": "Elektromagnetism och vågrörelselära",
+    "nameEn": "Electromagnetism and Waves",
+    "totalCredits": 7.5,
+    "periodCredits": {
+      "P1": 3.5,
+      "P2": 4,
+      "P3": 0,
+      "P4": 0
+    },
+    "year": 1,
+    "exams": [
+      "P2"
+    ],
+    "prerequisites": []
+  },
+  {
+    "code": "SF1546",
+    "name": "Numeriska metoder, grundkurs",
+    "nameEn": "Numerical Methods, Basic Course",
+    "totalCredits": 6,
+    "periodCredits": {
+      "P1": 0,
+      "P2": 0,
+      "P3": 4,
+      "P4": 2
+    },
+    "year": 1,
+    "prerequisitesParticipation": [
+      "SF1625",
+      "DD1310"
+    ],
+    "exams": [
+      "P3"
+    ]
+  },
+  {
+    "code": "SG1133",
+    "name": "Mekanik I",
+    "nameEn": "Mechanics I",
+    "totalCredits": 9,
+    "periodCredits": {
+      "P1": 0,
+      "P2": 0,
+      "P3": 2,
+      "P4": 7
+    },
+    "year": 1,
+    "prerequisitesParticipation": [
+      "SF1625"
+    ],
+    "exams": [
+      "P4"
+    ]
+  },
+  {
+    "code": "SF1624",
+    "name": "Algebra och geometri",
+    "nameEn": "Algebra and Geometry",
+    "totalCredits": 7.5,
+    "periodCredits": {
+      "P1": 0,
+      "P2": 7.5,
+      "P3": 0,
+      "P4": 0
+    },
+    "year": 1,
+    "prerequisites": [],
+    "exams": [
+      "P2"
+    ]
+  },
+  {
+    "code": "SF1625",
+    "name": "Envariabelanalys",
+    "nameEn": "Calculus in One Variable",
+    "totalCredits": 7.5,
+    "periodCredits": {
+      "P1": 7.5,
+      "P2": 0,
+      "P3": 0,
+      "P4": 0
+    },
+    "year": 1,
+    "prerequisites": [],
+    "exams": [
+      "P1"
+    ]
+  },
+  {
+    "code": "KD1000",
+    "name": "Kemiska principer för hållbar utveckling",
+    "nameEn": "Chemical Principles for Sustainability",
+    "totalCredits": 3,
+    "periodCredits": {
+      "P1": 0,
+      "P2": 0,
+      "P3": 0,
+      "P4": 3
+    },
+    "year": 1,
+    "prerequisites": [],
+    "exams": [
+      "P4"
+    ]
+  },
+  {
+    "code": "SF1626",
+    "name": "Flervariabelanalys",
+    "nameEn": "Calculus in Several Variables",
+    "totalCredits": 7.5,
+    "periodCredits": {
+      "P1": 0,
+      "P2": 0,
+      "P3": 7.5,
+      "P4": 0
+    },
+    "year": 1,
+    "prerequisitesParticipation": [
+      "SF1625"
+    ],
+    "exams": [
+      "P3"
+    ]
+  }
+]

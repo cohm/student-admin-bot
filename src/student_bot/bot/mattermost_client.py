@@ -417,8 +417,14 @@ class StudentBot:
             result.answered
             or result.meta_fallback
             or result.gate.reason == "programme_clarification"
+            or result.gate.reason == "prereq_clarification"
         ):
-            self.memory.append(job.user_id, job.root_id, "user", job.question)
+            # Store the already-merged question when this turn itself
+            # answered one of the bot's own clarifications, not the raw
+            # text — see `AnswerResult.merged_question`.
+            self.memory.append(
+                job.user_id, job.root_id, "user", result.merged_question or job.question
+            )
             self.memory.append(job.user_id, job.root_id, "assistant", result.answer)
         if result.program_code:
             self.memory.set_program_code(job.user_id, job.root_id, result.program_code)

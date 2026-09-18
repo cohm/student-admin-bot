@@ -401,6 +401,15 @@ class UrlIngestConfig(BaseModel):
     filtered_links_report_file: str = "data/url_filtered_links_report.json"
 
 
+class PrereqDataConfig(BaseModel):
+    # Curated KTH study-plan data (data/studieplaner/) as an extra retrieval
+    # source for prerequisite/eligibility questions — see bot/prereq_data.py.
+    # Behind its own flag so it can be switched off quickly without touching
+    # the corpus or dynamic-web paths.
+    enabled: bool = True
+    data_dir: str = "data/studieplaner"
+
+
 class MattermostSecrets(BaseModel):
     url: str
     port: int = 443
@@ -427,6 +436,7 @@ class Config(BaseModel):
     notify: NotifyConfig = Field(default_factory=NotifyConfig)
     dynamic_web: DynamicWebConfig = Field(default_factory=DynamicWebConfig)
     url_ingest: UrlIngestConfig = Field(default_factory=UrlIngestConfig)
+    prereq_data: PrereqDataConfig = Field(default_factory=PrereqDataConfig)
 
     # Secrets injected from env (only required when actually used).
     user_id_hash_salt: str | None = None

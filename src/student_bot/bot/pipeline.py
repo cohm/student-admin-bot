@@ -34,9 +34,11 @@ from student_bot.bot.citations import (
 from student_bot.bot.gate import GateDecision, evaluate as evaluate_gate
 from student_bot.bot.llm import stream_chat
 from student_bot.bot.memory import ConversationMemory
+from student_bot.bot import prereq_data
 from student_bot.bot.prompts import (
     compose_messages,
     compose_meta_fallback_messages,
+    counselor_ref,
     empty_answer_message,
     llm_unavailable_message,
     question_is_offtopic,
@@ -44,11 +46,19 @@ from student_bot.bot.prompts import (
 )
 from student_bot.bot.retrieval import RetrievalResult, RetrievedChunk, get_reranker, retrieve
 from student_bot.bot.web_retrieval import (
+    _COURSE_CODE_RE,
+    _build_multi_program_clarification,
+    _extract_program_candidates,
+    _get_program_aliases,
+    _parse_programme_year_level,
     _question_is_master_eligibility,
+    _question_is_prereq_eligibility_shaped,
+    bilingual_no_program_clarification,
     corpus_programme_substrings_for_query,
     history_without_programme_clarification_tail,
     maybe_fetch_dynamic_web,
     merge_programme_clarification_followup,
+    parse_program_admission_hints,
 )
 from student_bot.config import Config, get_config
 from student_bot.jargon import Jargon, JargonEntry
@@ -204,6 +214,134 @@ def _glossary_with_codes(glossary_md: str, lang: str, code_to_name: dict[str, st
     return glossary_md + "\n" + "\n".join(entries)
 
 
+# Bound on distinct courses turned into chunks from an explicit-course-code
+# prerequisite question — a real question names one or two courses; this
+# just keeps an unusual one from ballooning the prompt.
+_MAX_PREREQ_COURSES_PER_QUERY = 6
+
+
+@dataclass
+class _PrereqContextResolution:
+    """Result of `_resolve_prereq_context`. Either `clarification` is set
+    (program and/or admission year still unknown — return it verbatim and
+    stop) or `chunks` holds the curated answer (possibly empty, if the
+    resolved programme has no studieplan data at all — see
+    `bot/prereq_data.py`)."""
+
+    clarification: tuple[str, str] | None = None
+    chunks: list[RetrievedChunk] = field(default_factory=list)
+    resolved_program: str | None = None
+
+
+def _resolve_prereq_context(
+    cfg: Config,
+    contextual_q: str,
+    lang: str,
+    program_prior: str | None,
+    admission_term_prior: str | None,
+    admission_year_prefix_prior: str | None,
+) -> _PrereqContextResolution:
+    """Designbeslut punkt 1-4 of the v2 prereq-data implementation plan:
+    pin down programme and admission cohort (asking, never guessing) before
+    answering an eligibility/prerequisite question from `bot/prereq_data.py`.
+
+    Only called for questions `_question_is_prereq_eligibility_shaped`
+    already flagged as trigger B — see that function's docstring for why
+    trigger-A-only questions don't come through here.
+    """
+    if not cfg.prereq_data.enabled:
+        return _PrereqContextResolution()
+
+    candidates, _verbatim = _extract_program_candidates(
+        contextual_q, cfg, program_prior=program_prior
+    )
+    resolved_codes = sorted({c.code for c in candidates})
+
+    if not resolved_codes:
+        sv, en = bilingual_no_program_clarification()
+        return _PrereqContextResolution(clarification=(sv, en))
+
+    if len(resolved_codes) > 1:
+        try:
+            aliases = _get_program_aliases(cfg)
+        except Exception as e:
+            log.warning("prereq_data: failed to load program aliases for clarification: %s", e)
+            aliases = {}
+        sv, en = _build_multi_program_clarification(
+            [(p, [], "current") for p in resolved_codes], aliases
+        )
+        return _PrereqContextResolution(clarification=(sv, en))
+
+    program = resolved_codes[0]
+
+    # No curated data for this programme at all (it's outside the 10 we have
+    # studieplaner for) — fall through to the existing web/corpus path
+    # unchanged rather than asking for an admission year we have no use for.
+    if program not in prereq_data.known_program_codes(cfg):
+        return _PrereqContextResolution()
+
+    hints = parse_program_admission_hints(contextual_q)
+    cohort_year = hints.year_prefix
+    if not cohort_year and hints.exact_term and len(hints.exact_term) >= 4:
+        cohort_year = hints.exact_term[:4]
+    if not cohort_year:
+        if admission_year_prefix_prior:
+            cohort_year = admission_year_prefix_prior
+        elif admission_term_prior and len(admission_term_prior) >= 4:
+            cohort_year = admission_term_prior[:4]
+
+    if not cohort_year:
+        sv = (
+            f"För att svara om förkunskapskrav/kursutbud för **{program}** behöver jag "
+            "veta vilken antagningsomgång som gäller. Skriv gärna t.ex. **HT2024**."
+        )
+        en = (
+            f"To answer about prerequisites/course offerings for **{program}** I need "
+            "to know which admission round applies. Reply e.g. **HT2024**."
+        )
+        return _PrereqContextResolution(clarification=(sv, en), resolved_program=program)
+
+    if not prereq_data.cohort_data_exists(cfg, program, cohort_year):
+        counselor_sv = counselor_ref(cfg, "sv")
+        counselor_en = counselor_ref(cfg, "en")
+        sv = (
+            f"Jag har tyvärr inte förkunskapsdata för **{program}** för antagningsomgång "
+            f"HT{cohort_year} (min data täcker ungefär HT2022–HT2026). Kontakta "
+            f"{counselor_sv} för att få rätt svar."
+        )
+        en = (
+            f"I don't have prerequisite data for **{program}** for admission round "
+            f"HT{cohort_year} (my data covers roughly HT2022–HT2026). Please contact "
+            f"{counselor_en} for the right answer."
+        )
+        return _PrereqContextResolution(clarification=(sv, en), resolved_program=program)
+
+    # Programme and admission cohort are both pinned down now. A specific,
+    # explicitly named course gets just its own data (forward + backward);
+    # otherwise ("vilka kurser kan/kan inte jag läsa?", or a trigger-A
+    # course-listing question that also carried eligibility wording) the
+    # whole (optionally study-year-filtered) roster — see Designbeslut
+    # punkt 4 in the v2 plan.
+    explicit_codes: list[str] = []
+    for code in _COURSE_CODE_RE.findall(contextual_q.upper()):
+        if code not in explicit_codes:
+            explicit_codes.append(code)
+
+    if explicit_codes:
+        infos = [
+            info
+            for code in explicit_codes[:_MAX_PREREQ_COURSES_PER_QUERY]
+            if (info := prereq_data.course_data(cfg, program, code, cohort=cohort_year)) is not None
+        ]
+        chunks = prereq_data.build_chunks(infos, lang) if infos else []
+    else:
+        study_year = _parse_programme_year_level(contextual_q)
+        chunk = prereq_data.roster_chunk(cfg, program, lang, year=study_year, cohort=cohort_year)
+        chunks = [chunk] if chunk else []
+
+    return _PrereqContextResolution(chunks=chunks, resolved_program=program)
+
+
 def build_retrieval_query(
     cfg: Config,
     text: str,
@@ -309,6 +447,20 @@ class AnswerResult:
     latency_ms: int
     rate_limited: bool = False
     too_long: bool = False
+    # Set only when `question` was itself the answer to one of the bot's own
+    # clarification questions (programme pick, admission round, or the new
+    # prereq_data "which programme/year" ask) — the already-merged text
+    # (see `merge_programme_clarification_followup`), i.e. the prior turn's
+    # question with this reply folded in. Callers MUST persist this into
+    # `ConversationMemory` in place of the raw `question` when set, so that
+    # a SECOND clarification in a row (e.g. an ambiguous programme name
+    # answered with a colloquial phrase, which then needs an admission-year
+    # follow-up too) still has the original question to fold into — merging
+    # only ever looks one turn back, so each stored turn must already carry
+    # everything folded in from before it. Regression: without this, a
+    # two-clarification chain silently dropped the original question after
+    # the second hop.
+    merged_question: str | None = None
     # True when the gate refused but the LLM produced a self-aware fallback
     # (scope reflection / soft refusal). Worth keeping in conversation
     # memory for follow-ups, even though answered=False.
@@ -744,6 +896,9 @@ def answer(
     history_for_llm = history_without_programme_clarification_tail(
         history, programme_followup_merged
     )
+    # Callers persist this into ConversationMemory instead of the raw
+    # `question` when set — see `AnswerResult.merged_question`.
+    merged_question = contextual_q if programme_followup_merged else None
 
     # --- expand query for retrieval, build glossary for prompt ---
     jargon = _jargon(cfg)
@@ -768,6 +923,55 @@ def answer(
     glossary_md = _glossary_with_codes(
         glossary_md, lang, _resolve_program_codes(cfg, contextual_q, lang)
     )
+
+    # Curated studieplan prerequisite/eligibility data (bot/prereq_data.py) —
+    # v2 implementation plan. Only trigger B (eligibility-shaped questions,
+    # `_question_is_prereq_eligibility_shaped`) is wired in here; a plain
+    # trigger-A course-listing question ("vilka kurser ingår i CTFYS") keeps
+    # going through the existing dynamic-web programme clarification below,
+    # unmodified — see that function's docstring.
+    prereq_chunks: list[RetrievedChunk] = []
+    if _question_is_prereq_eligibility_shaped(contextual_q):
+        prereq_resolution = _resolve_prereq_context(
+            cfg,
+            contextual_q,
+            lang,
+            program_prior,
+            admission_term_prior,
+            admission_year_prefix_prior,
+        )
+        if prereq_resolution.clarification:
+            msg = (
+                prereq_resolution.clarification[0]
+                if lang == "sv"
+                else prereq_resolution.clarification[1]
+            )
+            if on_token:
+                on_token(msg)
+            return AnswerResult(
+                question=question,
+                lang=lang,
+                answered=False,
+                answer=msg,
+                rendered=msg,
+                gate=GateDecision(False, "prereq_clarification", 0.0, 0.0, 0),
+                retrieval=RetrievalResult(query=expanded_q),
+                latency_ms=int((time.monotonic() - t0) * 1000),
+                expanded_question=expanded_q,
+                jargon_hits=jargon_hits,
+                program_code=prereq_resolution.resolved_program,
+                merged_question=merged_question,
+            )
+        prereq_chunks = prereq_resolution.chunks
+        if (
+            prereq_resolution.resolved_program
+            and prereq_resolution.resolved_program not in code_to_name
+        ):
+            glossary_md = _glossary_with_codes(
+                glossary_md,
+                lang,
+                _resolve_program_codes(cfg, prereq_resolution.resolved_program, lang),
+            )
 
     web_result = maybe_fetch_dynamic_web(
         cfg,
@@ -796,7 +1000,10 @@ def answer(
     applied_admission_year_prefix = web_result.applied_admission_year_prefix if web_result else None
     source_urls: list[str] = []
     stale_cache_days: int | None = None
-    if web_result and web_result.clarification:
+    # `prereq_chunks` already has a confident, unambiguous answer (programme
+    # and admission cohort resolved above) — that outranks a web-side
+    # request for more context it doesn't actually need.
+    if web_result and web_result.clarification and not prereq_chunks:
         msg = web_result.clarification[0] if lang == "sv" else web_result.clarification[1]
         if on_token:
             on_token(msg)
@@ -812,6 +1019,7 @@ def answer(
             expanded_question=expanded_q,
             jargon_hits=jargon_hits,
             program_code=resolved_program_code,
+            merged_question=merged_question,
         )
     if web_result and web_result.missing_kth_course:
         msg = web_result.missing_kth_course[0] if lang == "sv" else web_result.missing_kth_course[1]
@@ -828,6 +1036,7 @@ def answer(
             latency_ms=int((time.monotonic() - t0) * 1000),
             expanded_question=expanded_q,
             jargon_hits=jargon_hits,
+            merged_question=merged_question,
         )
     if web_result and web_result.missing_kth_program:
         msg = (
@@ -846,9 +1055,15 @@ def answer(
             latency_ms=int((time.monotonic() - t0) * 1000),
             expanded_question=expanded_q,
             jargon_hits=jargon_hits,
+            merged_question=merged_question,
         )
     if web_result and web_result.chunks:
-        web_candidates = list(web_result.chunks)
+        # Studieplan chunks compete for the same rerank + keep-cap slots as
+        # the scraped page chunks, on the same terms as everything else —
+        # including the programme-code score boost a few lines down, since
+        # their rel_source ("studieplan:<PROGRAM>") carries the code too. An
+        # irrelevant match just ranks low and gets truncated like any other.
+        web_candidates = list(web_result.chunks) + prereq_chunks
         web_rerank_t0 = time.monotonic()
         reranked_web = _rerank_web_chunks(cfg, expanded_q, lang, web_candidates)
         web_rerank_ms = int((time.monotonic() - web_rerank_t0) * 1000)
@@ -941,6 +1156,21 @@ def answer(
             latency_ms=int((time.monotonic() - t0) * 1000),
             expanded_question=expanded_q,
             jargon_hits=jargon_hits,
+            merged_question=merged_question,
+        )
+    elif prereq_chunks:
+        # No web fetch fired (or it found nothing) for this question, but
+        # the curated studieplan data — already confirmed unambiguous by
+        # `_resolve_prereq_context` above — answers it directly. Treated as
+        # authoritative, like a live KTH page: a synthetic full-confidence
+        # gate rather than the corpus thresholds, which are calibrated for
+        # noisy scraped/PDF text.
+        reranked_prereq = _rerank_web_chunks(cfg, expanded_q, lang, list(prereq_chunks))
+        retrieval = RetrievalResult(
+            query=expanded_q, candidates=list(prereq_chunks), reranked=reranked_prereq
+        )
+        gate = GateDecision(
+            True, "prereq_data", 3.5, 3.5, len({c.rel_source for c in reranked_prereq})
         )
     else:
         corpus_terms = corpus_programme_substrings_for_query(expanded_q)
@@ -1063,6 +1293,7 @@ def answer(
             llm_ms=llm_ms,
             rss_mb=rss_mb,
             debug_payload=debug_payload,
+            merged_question=merged_question,
         )
 
     messages = compose_messages(
@@ -1207,6 +1438,7 @@ def answer(
         llm_ms=llm_ms,
         rss_mb=rss_mb,
         debug_payload=debug_payload,
+        merged_question=merged_question,
     )
 
 
@@ -1326,8 +1558,16 @@ def _repl(cfg: Config, console: Console, *, show_context: bool):
         if printed_any:
             sys.stdout.write("\n")
 
-        if result.answered or result.meta_fallback:
-            memory.append(user_id, thread_id, "user", q)
+        if (
+            result.answered
+            or result.meta_fallback
+            or result.gate.reason == "programme_clarification"
+            or result.gate.reason == "prereq_clarification"
+        ):
+            # Store the already-merged question when this turn itself
+            # answered one of the bot's own clarifications, not the raw
+            # text — see `AnswerResult.merged_question`.
+            memory.append(user_id, thread_id, "user", result.merged_question or q)
             memory.append(user_id, thread_id, "assistant", result.answer)
         if result.program_code:
             memory.set_program_code(user_id, thread_id, result.program_code)

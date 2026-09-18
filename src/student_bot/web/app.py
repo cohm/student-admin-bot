@@ -635,8 +635,14 @@ def _stream_answer(
             result.answered
             or result.meta_fallback
             or result.gate.reason == "programme_clarification"
+            or result.gate.reason == "prereq_clarification"
         ):
-            memory.append(web_user_id, "default", "user", payload.question)
+            # Store the already-merged question when this turn itself
+            # answered one of the bot's own clarifications, not the raw
+            # text — see `AnswerResult.merged_question`.
+            memory.append(
+                web_user_id, "default", "user", result.merged_question or payload.question
+            )
             memory.append(web_user_id, "default", "assistant", result.answer)
         if result.program_code:
             memory.set_program_code(web_user_id, "default", result.program_code)
