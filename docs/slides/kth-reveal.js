@@ -81,7 +81,17 @@
     // after the name. The long form (data-kth-institute) drives the cover
     // meta paragraph instead.
     const namePlusAff = author + (affShort ? ' (' + affShort + ')' : '');
-    const sections = document.querySelectorAll('.reveal .slides > section');
+    // Leaf slides only. In a 2D deck (reveal vertical stacks), a top-level
+    // section that contains child sections is a *stack* — a column
+    // container, not a slide itself; reveal only renders its children. So
+    // we inject chrome onto every section that has no nested <section>,
+    // walking one level into each stack. That gives every vertical
+    // sub-slide the same logo / footer / page number as a top-level slide,
+    // and numbers them sequentially in reading order (columns
+    // left-to-right, slides top-to-bottom). A flat deck has no stacks, so
+    // this set is identical to the old `.slides > section`.
+    const sections = [...document.querySelectorAll('.reveal .slides section')]
+      .filter((s) => !s.querySelector(':scope > section'));
     const total = sections.length;
     sections.forEach((section, i) => {
       const state = section.dataset.state;
@@ -148,6 +158,46 @@
             '<span class="right"></span>' +
           '</div>');
       }
+    });
+  }
+
+  // --------------------------------------------------------------------- //
+  // Authoring check: content-slide titles must be <h1>                    //
+  //                                                                       //
+  // kth-reveal.css lifts a content slide's title out of the flow and into //
+  // the header band beside the logo, via                                  //
+  //   .reveal section:not([data-state]) > h1:first-of-type               //
+  // That selector matches h1 ONLY. Write the title as <h2> and it stays   //
+  // in normal flow *below* the logo, inside the 240px top padding —       //
+  // the slide still looks plausible, just misaligned and short of         //
+  // vertical space, so the mistake survives review. It has been made      //
+  // more than once.                                                       //
+  //                                                                       //
+  // We can't fix it in CSS by also matching h2: the heading-hierarchy     //
+  // demo slide in example.html has a deliberate direct-child <h2> in      //
+  // flow, and widening the selector would yank it into the header band.   //
+  // So warn instead, and only in the unambiguous case — a content slide   //
+  // with no direct-child h1 but some other direct-child heading, which is //
+  // almost certainly a title written at the wrong level. Slides with no   //
+  // heading at all (full-bleed figures) are left alone.                   //
+  // --------------------------------------------------------------------- //
+  function checkSlideTitles() {
+    // Enumerate the same leaf-slide set injectMasterChrome numbers, so the
+    // slide number in the warning matches the one printed in the footer.
+    const slides = [...document.querySelectorAll('.reveal .slides section')]
+      .filter((s) => !s.querySelector(':scope > section'));
+    slides.forEach((section, i) => {
+      if (section.dataset.state) return;            // cover/divider/closing
+      if (section.querySelector(':scope > h1')) return;
+      const stray = section.querySelector(':scope > h2, :scope > h3, :scope > h4');
+      if (!stray) return;
+      console.warn(
+        '[kth-reveal] Slide ' + (i + 1) + ' ("' +
+        (stray.textContent || '').trim().slice(0, 40) +
+        '") uses <' + stray.tagName.toLowerCase() + '> as its title. ' +
+        'Content-slide titles must be <h1> as a direct child of <section>, ' +
+        'or the theme cannot place them beside the logo.'
+      );
     });
   }
 
@@ -242,17 +292,34 @@
   // Boot. injectMasterChrome touches the DOM directly, so defer until    //
   // DOMContentLoaded if loaded from <head>. Reveal handlers are queued  //
   // immediately and fire whenever Reveal becomes ready.                  //
+  //                                                                       //
+  // Markdown-driven decks (`<section data-markdown="…">`) don't have the //
+  // real <section>s in the DOM yet at DOMContentLoaded — the markdown    //
+  // plugin generates them at Reveal.initialize time, *after* both        //
+  // DOMContentLoaded and window.load. Detect that case and defer both    //
+  // the chrome injector and the KaTeX renderer to Reveal.on('ready'),    //
+  // so they run on the real sections. Hand-authored decks keep the       //
+  // synchronous paths.                                                    //
   // --------------------------------------------------------------------- //
   function boot() {
-    injectMasterChrome();
+    const hasMarkdownPlaceholder =
+      document.querySelector('.reveal .slides > section[data-markdown]');
+    if (hasMarkdownPlaceholder && typeof Reveal !== 'undefined') {
+      Reveal.on('ready', injectMasterChrome);
+      Reveal.on('ready', checkSlideTitles);
+      Reveal.on('ready', renderKatex);
+    } else {
+      injectMasterChrome();
+      checkSlideTitles();
+      if (document.readyState === 'complete') renderKatex();
+      else window.addEventListener('load', renderKatex);
+    }
     if (typeof Reveal !== 'undefined') {
       Reveal.on('ready',        mirrorStateToBackgrounds);
       Reveal.on('slidechanged', mirrorStateToBackgrounds);
       Reveal.on('ready',        fitWhenReady);
       Reveal.on('slidechanged', fitWhenReady);
     }
-    if (document.readyState === 'complete') renderKatex();
-    else window.addEventListener('load', renderKatex);
   }
 
   if (document.readyState === 'loading') {
@@ -265,6 +332,7 @@
   // adding slides or swapping titles in at runtime.
   window.KthReveal = {
     injectMasterChrome,
+    checkSlideTitles,
     mirrorStateToBackgrounds,
     fitTitle,
     fitAllTitles,
