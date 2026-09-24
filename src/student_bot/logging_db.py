@@ -680,26 +680,29 @@ class LogDB:
 
     def recent_turns_for_user(
         self,
-        user_id_hash: str,
+        user_id_hashes: list[str],
         limit: int = 20,
     ) -> list[dict]:
-        """Most recent qa_log rows for one user_id_hash.
+        """Most recent qa_log rows across one user's user_id_hashes.
 
         Powers the admin /stats inspector widget: pick a user → see their
         last N turns → click one → open the debug panel for that qa_id.
         Returns a thin row shape; the heavy debug payload is fetched
         separately via /api/debug/{qa_id}.
         """
+        if not user_id_hashes:
+            return []
+        placeholders = ",".join("?" * len(user_id_hashes))
         with self._lock, self._connect() as conn:
             rows = conn.execute(
-                """
+                f"""
                 SELECT id, ts, question, lang, gate_pass, gate_reason
                 FROM qa_log
-                WHERE user_id_hash = ?
+                WHERE user_id_hash IN ({placeholders})
                 ORDER BY ts DESC, id DESC
                 LIMIT ?
                 """,
-                (user_id_hash, int(limit)),
+                (*user_id_hashes, int(limit)),
             ).fetchall()
         return [
             {

@@ -475,9 +475,9 @@ def create_app(cfg: Config | None = None) -> FastAPI:
     def admin_recent(request: Request, user: str, limit: int = 20):
         """Admin-only: list recent qa_log rows for a registered user.
 
-        `user` is a HTTP Basic username (matches `data/web_users`). We
-        derive its `user_id_hash` the same way the bot does at write time,
-        so only rows for that user surface here. Non-admin callers get
+        `user` is a `data/web_users` username. We derive its
+        `user_id_hash`es the same way the bot does at write time, so only
+        rows for that user surface here. Non-admin callers get
         403; unknown user → empty list (not 404, so the inspector UI can
         render "no activity yet" without special-casing).
         """
@@ -486,8 +486,7 @@ def create_app(cfg: Config | None = None) -> FastAPI:
             raise HTTPException(403, "admin only")
         if not user or len(user) > 64:
             raise HTTPException(400, "bad user")
-        user_hash = db.hash_user(f"basic:{user}")
-        rows = db.recent_turns_for_user(user_hash, limit=min(max(1, limit), 50))
+        rows = db.recent_turns_for_user(_account_hashes(db, user), limit=min(max(1, limit), 50))
         return {"user": user, "rows": rows}
 
     @app.get(_join_base(base_path, "/api/debug/{qa_id}"))
@@ -550,6 +549,12 @@ def _web_user_id(payload, http_user: str | None) -> str:
     sid = payload.session_id or "default"
     name = payload.name or "Anonym"
     return f"web:{name}:{sid}"
+
+
+def _account_hashes(db: LogDB, username: str) -> list[str]:
+    """Every user_id_hash a `data/web_users` account can have logged under:
+    `basic:<username>` via HTTP Basic, `kth:<username>` via KTH SSO."""
+    return [db.hash_user(f"basic:{username}"), db.hash_user(f"kth:{username}")]
 
 
 def _web_user_id_from_request(request: Request, session_id: str) -> str:
@@ -1309,26 +1314,26 @@ def _stats_page(
     stats_path = _join_base(base_path, "/stats") or "/stats"
 
     # Registered web users → cross-reference qa_log via the same hash the bot
-    # already uses. No new schema; activity is derived per request. The
-    # section is web-specific by definition, so it's hidden when filtering to
-    # Mattermost-only.
-    show_users = channel != "mm"
+    # already uses. No new schema; activity is derived per request. Admin-only:
+    # it names who uses the bot and how much, which other students shouldn't
+    # see. The section is web-specific by definition, so it's also hidden when
+    # filtering to Mattermost-only.
+    show_users = is_admin and channel != "mm"
     registered = list_usernames(cfg) if show_users else []
-    hash_to_user = {db.hash_user(f"basic:{u}"): u for u in registered}
+    hash_to_user = {h: u for u in registered for h in _account_hashes(db, u)}
     activity = db.activity_for_users(list(hash_to_user.keys())) if hash_to_user else {}
     now_ts = int(time.time())
-    user_rows_data = [
-        {
-            "username": hash_to_user[h],
-            "n_qa": a["n_qa"],
-            "last_ts": a["last_ts"],
-        }
-        for h, a in activity.items()
-    ]
+    per_user: dict[str, dict] = {}
+    for h, a in activity.items():
+        row = per_user.setdefault(hash_to_user[h], {"n_qa": 0, "last_ts": 0})
+        row["n_qa"] += a["n_qa"]
+        row["last_ts"] = max(row["last_ts"], a["last_ts"])
+    user_rows_data = [{"username": u, **a} for u, a in per_user.items()]
     user_rows_data.sort(key=lambda r: (-r["n_qa"], r["username"]))
     # Admin-only inspector column: an "Inspect" button per user that fetches
     # their recent turns via /api/admin/recent and lists qa_ids that deep-link
-    # into the chat page's debug panel.
+    # into the chat page's debug panel. The whole table is admin-only now; the
+    # is_admin checks below stay so Inspect remains admin-only if it reopens.
     inspect_th = '<th class="text" data-i18n="stats.users.th.inspect"></th>' if is_admin else ""
     inspect_td = (
         '<td class="text"><button type="button" class="stats-inspect-btn ghost" '
