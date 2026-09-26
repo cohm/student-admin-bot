@@ -44,7 +44,8 @@
 #
 # EXIT CODES
 #   0  green
-#   2  warnings (churn, a new recall miss, gate wobble) — look, don't panic
+#   2  warnings (churn, a new recall miss, gate wobble, a study-plan cache
+#      gap) — look, don't panic
 #   3  recall@5 fell — the index lost something it used to find
 #   1  the run itself failed (scrape, reindex, docker, lock held)
 #
@@ -61,7 +62,7 @@
 #                        on startup, and the page cache is cold after a reindex
 #                        has just walked the whole corpus).
 #   BOT_MAINT_MAX_MINUTES  Report the run as slow above this. Default: 45.
-#                        Steady state is ~9 min and the worst catch-up run
+#                        Steady state is ~13 min and the worst catch-up run
 #                        measured was 21 min, so 45 means "stuck", not "busy".
 #                        Advisory: reported, never enforced mid-run.
 #   BOT_MAINT_MIN_FREE_GB  Refuse to start below this. Default: 4
@@ -233,7 +234,7 @@ if [[ $DRY_RUN -eq 1 ]]; then
 [maintain] dry run — would, in order:
   1. eval (baseline)          -> $BEFORE_JSON
   2. snapshot chroma          -> data/backups/, keeping $KEEP
-  3. scrape the URL corpus    $( [[ "$SKIP_SCRAPE" == "1" ]] && echo "(skipped)" )
+  3. scrape the URL corpus    $( [[ "$SKIP_SCRAPE" == "1" ]] && echo "(skipped)" || echo "+ study-plan cache -> data/web_cache.sqlite" )
   4. reindex data/chroma      (in place)
   5. eval (after)             -> $AFTER_JSON
   6. restart: $SERVICES       (required — see the header)
@@ -270,12 +271,21 @@ RESTORE_HINT="$(ls -1t data/backups/*chroma*.tar.gz 2>/dev/null | head -1 || tru
 # ---------------------------------------------------------------------------
 # 3. Scrape. The one service with the corpus mounted read-write.
 # ---------------------------------------------------------------------------
+#     Its last phase warms the study-plan cache, which never fails the command:
+#     gaps come as a "WARM GAPS:" line in the log instead.
 SCRAPE_S=0
+WARM_NOTE=""
 if [[ "$SKIP_SCRAPE" != "1" ]]; then
   step "Scraping the URL corpus"
   t0=$(date +%s)
-  dc run --rm -T scrape || die "scrape failed — corpus and index left untouched"
+  SCRAPE_LOG="$MAINT_DIR/scrape-$STAMP.log"
+  dc run --rm -T scrape 2>&1 | tee "$SCRAPE_LOG" \
+    || die "scrape failed — corpus and index left untouched"
   SCRAPE_S=$(( $(date +%s) - t0 ))
+  if grep -q '^WARM GAPS:' "$SCRAPE_LOG"; then
+    WARM_NOTE="The study-plan cache has gaps; see \`$SCRAPE_LOG\`. Nothing reads it yet (#136)."
+    warn "study-plan cache has gaps"
+  fi
 fi
 
 # ---------------------------------------------------------------------------
@@ -426,12 +436,15 @@ DEADLINE_NOTE=""
 if (( TOTAL_S > MAX_MINUTES * 60 )); then
   DEADLINE_NOTE="
 ⏰ Took $(fmt $TOTAL_S), over the ${MAX_MINUTES} min expected. Steady state is
-~9 min; check the scrape and reindex timings above."
+~13 min; check the scrape and reindex timings above."
   warn "run took $(fmt $TOTAL_S), over ${MAX_MINUTES} min"
 fi
 
 {
   printf '%s\n\n' "$COMPARISON"
+  # Right after the eval's comparison: that judges the index, so it can read
+  # green while this is what made the notification a warning.
+  [[ -n "$WARM_NOTE" ]] && printf '⚠️ %s\n\n' "$WARM_NOTE"
   [[ -n "$REINDEX_SUMMARY" ]] && printf '`%s`\n\n' "$REINDEX_SUMMARY"
   printf '%s\n' "$TIMINGS"
   [[ -n "$DEADLINE_NOTE" ]] && printf '%s\n' "$DEADLINE_NOTE"
@@ -443,6 +456,10 @@ fi
 } > "$REPORT"
 
 info "report -> $REPORT"
+# After the report: warm gaps are a warning, but not a reason to restore the index.
+if [[ -n "$WARM_NOTE" ]] && (( VERDICT == 0 )); then
+  VERDICT=2
+fi
 case "$VERDICT" in
   0) SEVERITY=ok ;;
   3) SEVERITY=critical ;;

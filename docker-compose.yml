@@ -97,7 +97,8 @@ services:
       - "host.docker.internal:host-gateway"
     volumes:
       - ./config.yaml:/app/config.yaml:ro
-      # Writes url_source_map.json and url_filtered_links_report.json here.
+      # Writes url_source_map.json, url_filtered_links_report.json and the
+      # study-plan cache in web_cache.sqlite here.
       - ./data:/app/data
       # Read-WRITE, unlike every other service. This is the whole point.
       - ${CORPUS_HOST_PATH:-./docs/corpus}:/app/docs/corpus

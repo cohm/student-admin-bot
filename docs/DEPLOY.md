@@ -361,8 +361,10 @@ Measured on prod, 2026-09-12 (`--skip-scrape`, nothing to re-embed):
 | eval (after) | 1 m 45 s |
 | **total** | **~7 m** |
 
-A real weekly run adds the scrape (~1 min) and a handful of changed chunks, so
-expect **8–9 min**. Note the reindex floor: 3 m 22 s with *nothing* to embed,
+A real weekly run adds the scrape (~1 min), the study-plan cache at its end
+(3–5 min: 19 programmes, 726 pages, measured on a dev machine 2026-09-24,
+not yet on prod) and a handful of changed chunks, so expect
+**~13 min**. Note the reindex floor: 3 m 22 s with *nothing* to embed,
 because parsing all 187 corpus files is not incremental — only embedding is.
 
 **Why 04:00 and not the 02:17–03:00 gap.** Squeezing the run between the
@@ -372,7 +374,7 @@ after a month of corpus drift does not (21 m 31 s is already on record for a
 single large import). Starting after the host snapshot removes the constraint
 entirely — nothing downstream is waiting, so a long run costs nothing. What is
 left is a *duration* check: `BOT_MAINT_MAX_MINUTES` (default 45) puts a note in
-the report when a run takes several times the ~9 minute steady state, which
+the report when a run takes several times the ~13 minute steady state, which
 means something is stuck rather than merely busy.
 
 Order of operations, and why:
@@ -381,6 +383,13 @@ Order of operations, and why:
 2. **snapshot** `student-bot-backup --only chroma --keep 4`. Rotation counts
    per component set, so these never age out the nightly full archives.
 3. **scrape** in the `scrape` service (the corpus is `:ro` everywhere else).
+   Its last phase fills the study-plan cache (`study_plan_cache:` in
+   `config.yaml`): course lists and kursplan eligibility per programme and
+   cohort, stored in `data/web_cache.sqlite` for #136. Nothing reads it yet.
+   A page that cannot be refreshed keeps its older entry and turns the run
+   yellow (`WARM GAPS:` in `data/maintenance/scrape-*.log`). To fill it without
+   waiting for Sunday, e.g. after the first deploy or a changed programme list:
+   `docker compose run --rm scrape student-bot-fetch-url-corpus --warm-only`.
 4. **reindex**, in place.
 5. **eval (after)**, into a second JSON.
 6. **restart** `web mattermost` — see the corpus-refresh section above; without
@@ -405,12 +414,14 @@ filled once — and the failure it guards against is recoverable in seconds from
 the step-2 snapshot. So the job never decides to roll back on its own; it puts
 the exact restore command in the report.
 
-Exit codes, which are also the notification's headline:
+Exit codes, which also set the notification's severity. The headline is the
+eval's verdict on the index, so a run whose only warning is a study-plan cache
+gap reads green there, with the gap noted right after the comparison:
 
 | code | meaning |
 |---|---|
 | 0 | green |
-| 2 | warnings — churn, a swapped recall failure, a gate wobble |
+| 2 | warnings — churn, a swapped recall failure, a gate wobble, a study-plan cache gap |
 | 3 | recall@5 fell: the index lost something it used to find |
 | 1 | the run itself failed (scrape, reindex, docker, lock held) |
 

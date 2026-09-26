@@ -374,6 +374,28 @@ class DynamicWebConfig(BaseModel):
     discriminator_rare_token_max_aliases: int = 3
 
 
+class StudyPlanCacheConfig(BaseModel):
+    """Programme course lists and kursplan eligibility, cached by the weekly
+    scrape (`bot/kth_study_plan.py`) for backward prerequisite questions (#136).
+    Off unless config.yaml turns it on."""
+
+    enabled: bool = False
+    programmes: list[str] = Field(default_factory=list)
+    # Autumn cohorts back from the latest intake. KTH lists year pages from the
+    # previous läsår on, so with years 1-3 a fifth cohort would always be empty.
+    cohorts: int = 4
+    # C-programmes list years 4-5 under their master tracks, not here.
+    years_per_programme: int = 3
+    # CTFYS's 49 kursplaner on kth.se (2026-09-24): 1 -> 50 s, 4 -> 25-45 s,
+    # 8 -> 22-25 s. 8 is faster but doubles the load, and in one run at 8 kth.se
+    # slowed down and 14 pages failed. A weekly batch job can wait.
+    max_concurrent_fetches: int = 4
+    # At dynamic_web's 6 s, 1-37 of those 49 timed out across six runs; at 30 s,
+    # none unless kth.se was struggling. Per socket read, not per page: while it
+    # struggled, one page took 580 s.
+    fetch_timeout_seconds: float = 30.0
+
+
 class UrlIngestConfig(BaseModel):
     enabled: bool = False
     # Domains that may be fetched/crawled into corpus files.
@@ -426,6 +448,7 @@ class Config(BaseModel):
     jargon: JargonConfig = Field(default_factory=JargonConfig)
     notify: NotifyConfig = Field(default_factory=NotifyConfig)
     dynamic_web: DynamicWebConfig = Field(default_factory=DynamicWebConfig)
+    study_plan_cache: StudyPlanCacheConfig = Field(default_factory=StudyPlanCacheConfig)
     url_ingest: UrlIngestConfig = Field(default_factory=UrlIngestConfig)
 
     # Secrets injected from env (only required when actually used).

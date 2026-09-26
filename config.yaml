@@ -348,6 +348,36 @@ dynamic_web:
   program_aliases_ttl_hours: 48
   program_aliases: {}
 
+# Course lists and kursplan eligibility (Särskild behörighet) per programme and
+# cohort, cached in dynamic_web.cache_db by the weekly scrape — see
+# bot/kth_study_plan.py. Groundwork for backward prerequisite questions (#136);
+# nothing reads it yet.
+study_plan_cache:
+  enabled: yes
+  # KTH's current civilingenjör programmes (kth.se/utbildning/hitta). CKEMV,
+  # CLMDA, CLMFY, CLMKE, CMIEL and CTKMK are left out: an empty curriculum in
+  # every cohort (discontinued, checked 2026-09-22).
+  programmes:
+    - CBIOT
+    - CDATE
+    - CDEPR
+    - CELTE
+    - CENMI
+    - CFATE
+    - CINEK
+    - CINTE
+    - CITEH
+    - CLGYM
+    - CMAST
+    - CMATD
+    - CMEDT
+    - CMETE
+    - COPEN
+    - CSAMH
+    - CTFYS
+    - CTKEM
+    - CTMAT
+
 # URL/PDF corpus ingestion from a manifest.
 url_ingest:
   enabled: yes

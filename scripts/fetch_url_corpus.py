@@ -552,11 +552,37 @@ def _write_programme_code_index(cfg, docs_root: Path, output_dir_abs: Path) -> d
     }
 
 
+def _warm_study_plans(cfg: Config) -> None:
+    """Last phase of the scrape: fill the study-plan cache (#136)."""
+    if not cfg.study_plan_cache.enabled:
+        return
+    from student_bot.bot.kth_study_plan import warm_study_plans
+
+    click.echo(f"Warming study plans: {len(cfg.study_plan_cache.programmes)} programme(s)")
+    started = time.time()
+    report = warm_study_plans(cfg)
+    click.echo(
+        f"  Study plans: {report.programme_pages} programme pages, {report.course_pages} "
+        f"kursplaner ({time.time() - started:.0f}s)"
+    )
+    if report.gaps:
+        # Parsed by `maintain.sh`; keep the prefix in sync there.
+        click.echo(f"WARM GAPS: {'; '.join(report.gaps)}")
+
+
 @click.command()
 @click.option("--limit-seeds", type=int, default=None, help="Process at most N manifest entries.")
-def main(limit_seeds: int | None) -> None:
+@click.option(
+    "--warm-only",
+    is_flag=True,
+    help="Only fill the study-plan cache: after a first deploy or a changed programme list.",
+)
+def main(limit_seeds: int | None, warm_only: bool) -> None:
     run_started = time.time()
     cfg = get_config()
+    if warm_only:
+        _warm_study_plans(cfg)
+        return
     if not cfg.url_ingest.enabled:
         raise click.ClickException("url_ingest.enabled is false in config.yaml")
 
@@ -759,6 +785,8 @@ def main(limit_seeds: int | None) -> None:
                 click.echo(f"    - {reason}: {data['count']} (samples: {samples})")
             else:
                 click.echo(f"    - {reason}: {data['count']}")
+    if limit_seeds is None:  # a quick test scrape shouldn't cost 700 kth.se requests
+        _warm_study_plans(cfg)
 
 
 if __name__ == "__main__":

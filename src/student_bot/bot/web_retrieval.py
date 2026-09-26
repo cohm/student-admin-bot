@@ -1174,7 +1174,8 @@ def _extract_targets_with_cfg(
     return out
 
 
-def _fetch_html(url: str, cfg: Config) -> tuple[str, str]:
+def _fetch_html(url: str, cfg: Config, *, timeout: float | None = None) -> tuple[str, str]:
+    """`timeout` overrides `dynamic_web.timeout_seconds`, e.g. for concurrent fetches."""
     req = Request(
         url,
         headers={
@@ -1182,7 +1183,7 @@ def _fetch_html(url: str, cfg: Config) -> tuple[str, str]:
             "Accept": "text/html,application/xhtml+xml",
         },
     )
-    with urlopen(req, timeout=cfg.dynamic_web.timeout_seconds) as resp:
+    with urlopen(req, timeout=timeout or cfg.dynamic_web.timeout_seconds) as resp:
         final_url = _canonicalize(resp.geturl())
         payload = resp.read(cfg.dynamic_web.max_bytes + 1)
         if len(payload) > cfg.dynamic_web.max_bytes:
@@ -1976,14 +1977,18 @@ def _program_links(html: str, base_url: str) -> list[str]:
     return dedup
 
 
-def _compressed_application_store(html: str) -> dict | None:
-    m = _COMP_STORE_RE.search(html or "")
+def _decode_kth_state_blob(html: str, pattern: re.Pattern[str]) -> dict | None:
+    m = pattern.search(html or "")
     if not m:
         return None
     try:
         return json.loads(unquote(m.group(1)))
     except (json.JSONDecodeError, ValueError):
         return None
+
+
+def _compressed_application_store(html: str) -> dict | None:
+    return _decode_kth_state_blob(html, _COMP_STORE_RE)
 
 
 # Eligibility ("behörighetsgivande kurser") block extraction.
