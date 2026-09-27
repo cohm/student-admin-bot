@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import pytest
 
+from student_bot.bot import web_retrieval as wr
 from student_bot.config import get_config
 from student_bot.bot.pipeline import (
     _alias_language,
@@ -17,6 +18,28 @@ from student_bot.bot.pipeline import (
     _resolve_program_codes,
 )
 from student_bot.bot.web_retrieval import _extract_program_candidates
+
+# alias -> code, shaped like data/program_aliases.json: the real entries for the
+# three programmes these tests use, in both languages. Without this stub the
+# table is fetched live from kth.se whenever data/program_aliases.json is
+# missing or older than 48 h, which in CI is always — so these tests failed
+# whenever GitHub's runners could not reach kth.se (2026-09-26 onwards).
+_ALIASES = {
+    "ctfys": "CTFYS",
+    "civilingenjörsutbildning i teknisk fysik": "CTFYS",
+    "degree programme in engineering physics": "CTFYS",
+    "ttfym": "TTFYM",
+    "masterprogram, teknisk fysik": "TTFYM",
+    "master's programme, engineering physics": "TTFYM",
+    "cfate": "CFATE",
+    "civilingenjörsutbildning i farkostteknik": "CFATE",
+    "degree programme in vehicle engineering": "CFATE",
+}
+
+
+@pytest.fixture(autouse=True)
+def _no_network_alias_table(monkeypatch):
+    monkeypatch.setattr(wr, "_get_program_aliases", lambda _cfg: dict(_ALIASES))
 
 
 @pytest.fixture(scope="module")
