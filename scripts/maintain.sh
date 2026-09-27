@@ -272,7 +272,10 @@ RESTORE_HINT="$(ls -1t data/backups/*chroma*.tar.gz 2>/dev/null | head -1 || tru
 # 3. Scrape. The one service with the corpus mounted read-write.
 # ---------------------------------------------------------------------------
 #     Its last phase warms the study-plan cache, which never fails the command:
-#     gaps come as a "WARM GAPS:" line in the log instead.
+#     gaps come as a "WARM GAPS:" line in the log instead. A run that fetches
+#     no page at all (kth.se down) does fail it, having written nothing, so
+#     the die below skips the reindex and the week is reported, not green.
+#     Pages that fail individually keep their previous source-map entry.
 SCRAPE_S=0
 WARM_NOTE=""
 if [[ "$SKIP_SCRAPE" != "1" ]]; then
