@@ -585,9 +585,14 @@ bind-mounted so the archive lands on the host either way.
 ```cron
 # 3-deep rolling full backup, 02:17 nightly — finishes well before the host
 # snapshots this VM at 03:00, so that snapshot contains a complete archive.
-17 2 * * * cd $HOME/student-admin-bot && docker compose run --rm web \
+17 2 * * * cd $HOME/student-admin-bot && docker compose run --rm -T web \
     student-bot-backup --keep 3 >> $HOME/bot-backup.log 2>&1
 ```
+
+`-T` disables pseudo-TTY allocation: cron has no terminal, and without a TTY
+the output reaches the log as plain text rather than with ANSI colour codes.
+This entry is not installed by `scripts/deploy.sh` or anything else — add it
+with `crontab -e`, then confirm the next morning with `tail ~/bot-backup.log`.
 
 **Back up everything, not just Chroma.** `data/chroma` can always be rebuilt
 with `scripts.reindex`; `logs.sqlite` cannot — it is the only irreplaceable
