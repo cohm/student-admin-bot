@@ -6,12 +6,18 @@ Usage:
   uv run student-bot-backup --out /tmp           # somewhere else
   uv run student-bot-backup --verify FILE.tar.gz # re-check an archive's checksums
 
+On a host without uv (prod), run the same thing in the container. `./data` is
+bind-mounted, so archives land on the host, and `--verify` takes the same
+repo-relative path:
+  docker compose run --rm -T web student-bot-backup
+  docker compose run --rm -T web student-bot-backup --verify data/backups/FILE.tar.gz
+
 SQLite files (`chroma.sqlite3`, `logs.sqlite`, `web_cache.sqlite`) are copied
 with SQLite's online backup API, so the running stack does not have to be
 stopped and WAL contents are folded in. The Chroma HNSW segment files
 (`data_level0.bin` & friends) are plain binaries that `scripts/reindex.py`
-rewrites wholesale — stop the stack (`uv run student-bot-down`) first if a
-reindex might run concurrently.
+rewrites wholesale — stop the stack (`uv run student-bot-down`, or on prod
+`docker compose stop web mattermost`) first if a reindex might run concurrently.
 
 Every archive carries a MANIFEST.json recording sha256 per file plus the
 chromadb/Python versions that wrote the index, which is what tells you whether
@@ -40,7 +46,7 @@ from pathlib import Path
 import click
 from rich.console import Console
 
-from student_bot.config import get_config
+from student_bot.config import PROJECT_ROOT, get_config
 
 
 COMPONENTS = ("chroma", "logs", "cache")
@@ -75,6 +81,26 @@ def _row_count(db: Path, table: str) -> int | None:
             return int(conn.execute(f"select count(*) from {table}").fetchone()[0])
     except sqlite3.Error:
         return None
+
+
+def verify_hints(target: Path, root: Path = PROJECT_ROOT) -> list[str]:
+    """The `--verify` command for `target`, in the uv and the container form.
+
+    Prod has no uv, so a uv-only hint is a command that does not exist there.
+    The container form needs a repo-relative path: inside the container the
+    archive is /app/data/..., which means nothing on the host, while
+    data/backups/... resolves the same on both sides of the bind mount. A
+    target outside the repo is not reachable from the container at all, so it
+    gets the uv form only.
+    """
+    try:
+        rel = target.resolve().relative_to(root.resolve())
+    except ValueError:
+        return [f"uv run student-bot-backup --verify {target}"]
+    return [
+        f"uv run student-bot-backup --verify {rel}",
+        f"docker compose run --rm -T web student-bot-backup --verify {rel}",
+    ]
 
 
 def _verify(console: Console, archive: Path) -> int:
@@ -259,7 +285,9 @@ def main(
             "[yellow]contains logs.sqlite: qa_log holds student questions and answers — "
             "keep this archive internal (use --only chroma to share)[/yellow]"
         )
-    console.print(f"verify with: uv run student-bot-backup --verify {target}")
+    console.print("verify with:")
+    for hint in verify_hints(target):
+        console.print(f"  {hint}", markup=False, highlight=False, soft_wrap=True)
 
     # Prune only after the new archive is safely on disk, so a failure above
     # never costs us the old ones too.

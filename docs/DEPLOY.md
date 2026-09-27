@@ -137,6 +137,9 @@ Quick gateway checks (run from the host, with `LITELLM_API_KEY` exported):
 ```bash
 curl -s  http://100.75.42.33:4000/v1/models -H "Authorization: Bearer $LITELLM_API_KEY" | jq '.data[].id'
 LLM_ACTIVE=litellm/qwen3.6 uv run student-bot-cli "Vilka krav gäller för masterbehörighet?"
+# no uv on the host (prod):
+docker compose run --rm -T -e LLM_ACTIVE=litellm/qwen3.6 web \
+    student-bot-cli "Vilka krav gäller för masterbehörighet?"
 ```
 
 ---
@@ -549,23 +552,36 @@ rewriting `data/chroma` at once.
 
 ## Backups, and handing a snapshot to a collaborator
 
-`uv run student-bot-backup` (`scripts/backup.py`) snapshots the on-disk state
+`student-bot-backup` (`scripts/backup.py`) snapshots the on-disk state
 into a timestamped `.tar.gz` under `data/backups/`. SQLite files are copied via
 SQLite's **online backup API**, so the stack does not have to be stopped and any
 `-wal` contents are folded in. The Chroma **HNSW segment binaries** are plain
 files that `scripts/reindex.py` rewrites wholesale — stop the stack first
-(`uv run student-bot-down`) if a reindex might be running at the same time.
+(`uv run student-bot-down`, or `docker compose stop web mattermost` on a host
+without uv) if a reindex might be running at the same time.
 
 Every archive carries a `MANIFEST.json` with a sha256 per file plus the
 **chromadb and Python versions that wrote the index** — which is exactly what
 decides whether a persist directory opens cleanly somewhere else.
 
 ```bash
+# with uv (a dev machine)
 uv run student-bot-backup                       # chroma + logs + web cache
 uv run student-bot-backup --only chroma         # vector index only
 uv run student-bot-backup --out /tmp            # write elsewhere
-uv run student-bot-backup --verify FILE.tar.gz  # re-check checksums (also works on the receiving end)
+uv run student-bot-backup --verify data/backups/FILE.tar.gz  # re-check checksums (also works on the receiving end)
+
+# without uv (prod) — the same, in the container
+docker compose run --rm -T web student-bot-backup
+docker compose run --rm -T web student-bot-backup --only chroma
+docker compose run --rm -T web student-bot-backup --verify data/backups/FILE.tar.gz
 ```
+
+In the container form, keep archive paths **repo-relative** (`data/backups/…`):
+`./data` is bind-mounted and the container's working directory is `/app`, so
+that path means the same file on both sides. `--out` outside `./data` writes
+into the throwaway container and is lost with `--rm`. The hint the script
+prints after each run gives both forms with the right path.
 
 ### Nightly rolling backup on prod
 
@@ -610,7 +626,8 @@ Notes:
 - Full archives contain `qa_log` student text and must stay on this host. The
   script prints a warning to that effect on every run.
 - Restore is a plain extract; verify first:
-  `uv run student-bot-backup --verify <archive>`.
+  `docker compose run --rm -T web student-bot-backup --verify data/backups/<archive>`
+  (or `uv run student-bot-backup --verify …` where uv exists).
 
 ### ⚠️ Which parts may leave the host
 
@@ -634,9 +651,9 @@ cd ~/student-admin-bot
 # a) host has uv + a synced venv
 uv run student-bot-backup --only chroma          # ~11 MB for the current corpus
 
-# b) no uv on the host — run it in the container (needs an image built after
-#    this script landed; `./data` is bind-mounted, so the output is on the host)
-docker compose run --rm web student-bot-backup --only chroma
+# b) no uv on the host (prod) — run it in the container; `./data` is
+#    bind-mounted, so the output is on the host
+docker compose run --rm -T web student-bot-backup --only chroma
 
 # c) neither — plain tar. No MANIFEST/checksums, and stop the stack first if a
 #    reindex could be running: `docker compose stop mattermost web`
@@ -657,6 +674,16 @@ tar -xzf student-bot-backup-chroma-*.tar.gz
 cp -R data/chroma data/chroma.bak          # keep their own index first
 rm -rf data/chroma && mv student-bot-backup-chroma-*/chroma data/chroma
 uv run student-bot-cli "Vem är programansvarig för CTFYS?"
+```
+
+If the receiving side runs Docker only, put the archive under `data/backups/`
+first (the container sees nothing else), then:
+
+```bash
+docker compose run --rm -T web student-bot-backup --verify data/backups/student-bot-backup-chroma-<stamp>.tar.gz
+# extract and swap data/chroma as above, then:
+docker compose run --rm -T web student-bot-cli "Vem är programansvarig för CTFYS?"
+docker compose restart web mattermost      # running services keep the old index in memory
 ```
 
 A prod index written by an **older chromadb** is migrated in place the first
