@@ -447,6 +447,43 @@ def _vetted_links_for_doc(
     return out
 
 
+def _read_source_map(path: Path) -> dict[str, dict[str, Any]]:
+    """The map a previous run wrote, or {} when there is none or it is unreadable."""
+    try:
+        raw = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return {}
+    if not isinstance(raw, dict):
+        return {}
+    return {str(k): v for k, v in raw.items() if isinstance(v, dict)}
+
+
+def merge_source_map(
+    fresh: dict[str, dict[str, Any]],
+    previous: dict[str, dict[str, Any]],
+    docs_root: Path,
+) -> tuple[dict[str, dict[str, Any]], int]:
+    """This run's entries, plus every earlier entry whose page is still on disk.
+
+    The map describes the markdown files in the corpus, not the pages one run
+    happened to reach. A page whose fetch failed keeps its file (the scraper
+    never deletes), so it has to keep its entry too; otherwise its citations
+    lose their `host: title` label until a later run fetches it again. Before
+    this, a run during a kth.se outage wrote a near-empty map over a full one.
+
+    A fresh entry always wins over an old one for the same file. An old entry
+    whose file is gone is dropped. Returns (merged map, number of kept entries).
+    """
+    merged = dict(fresh)
+    kept = 0
+    for rel, meta in previous.items():
+        if rel in merged or not (docs_root / rel).is_file():
+            continue
+        merged[rel] = meta
+        kept += 1
+    return merged, kept
+
+
 def _write_source_map(path: Path, mapping: dict[str, dict[str, Any]]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(mapping, ensure_ascii=False, indent=2), encoding="utf-8")
@@ -604,9 +641,11 @@ def main(limit_seeds: int | None, warm_only: bool) -> None:
         ) from e
     output_dir_abs.mkdir(parents=True, exist_ok=True)
 
+    source_map_path = cfg.absolute(Path(cfg.url_ingest.source_map_file))
     source_map: dict[str, dict[str, Any]] = {}
     filtered_links_report: dict[str, Any] = {"total_filtered": 0, "reasons": {}}
     written = 0
+    fetched = 0
     skipped = 0
     explicit_seed_count = len(seeds)
     discovered_total = 0
@@ -666,6 +705,7 @@ def main(limit_seeds: int | None, warm_only: bool) -> None:
                 skipped += 1
                 _record_skip_reason(skip_reasons, "fetch_failed", url)
                 continue
+            fetched += 1
 
             if not _host_allowed(
                 urlsplit(final_url).netloc, cfg.url_ingest.domains_ingest_allowlist
@@ -743,6 +783,17 @@ def main(limit_seeds: int | None, warm_only: bool) -> None:
                     if link not in seen and _matches_policy(link, seed):
                         q.append((link, depth + 1))
 
+    # Not one page came back: kth.se is down or unreachable from here. Stop
+    # before touching the source map, the link report or the study-plan cache,
+    # and fail, so that maintain.sh reports it and skips the reindex instead of
+    # reindexing an unchanged corpus and calling the week green.
+    if fetched == 0:
+        raise click.ClickException(
+            f"no page could be fetched ({skipped} skipped, "
+            f"{skip_reasons.get('fetch_failed', {}).get('count', 0)} fetch failures); "
+            "is kth.se reachable? Nothing was written."
+        )
+
     # The programme code table cannot be scraped from HTML (the page is a JS
     # app); render it from the same JSON store the router already reads.
     extra = _write_programme_code_index(cfg, docs_root, output_dir_abs)
@@ -750,7 +801,9 @@ def main(limit_seeds: int | None, warm_only: bool) -> None:
         source_map.update(extra)
         written += 1
 
-    source_map_path = cfg.absolute(Path(cfg.url_ingest.source_map_file))
+    source_map, kept = merge_source_map(source_map, _read_source_map(source_map_path), docs_root)
+    if kept:
+        click.echo(f"Kept {kept} source-map entries from the previous run (not refetched)")
     _write_source_map(source_map_path, source_map)
     filtered_report_path = cfg.absolute(Path(cfg.url_ingest.filtered_links_report_file))
     _write_source_map(filtered_report_path, filtered_links_report)
