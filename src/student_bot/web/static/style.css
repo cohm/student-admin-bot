@@ -854,6 +854,19 @@ body.app-shell.viewing-debug { overflow-x: auto; }
 .debug-turn[open] > .debug-turn-head > .debug-turn-q { white-space: normal; }
 .debug-turn-body { padding: 0 12px 12px; border-top: 1px solid var(--border); }
 
+/* A turn opened from the /stats inspector: someone else's question, with the
+   answer as they saw it, above the diagnostics. */
+.debug-turn-foreign { border-left: 3px solid var(--kth-skyblue); }
+.debug-foreign-qa { padding-top: 8px; }
+.debug-foreign-qa h4 { margin: 12px 0 4px; }
+.debug-foreign-meta { margin: 4px 0 0; color: var(--muted); font-size: 0.9em; }
+.debug-foreign-q { margin: 0; white-space: pre-wrap; }
+.debug-foreign-a {
+  padding: 8px 12px;
+  border-radius: 6px;
+  border: 1px solid var(--border);
+}
+
 /* ---------------------------------------------------------------------------
    Narrow viewports.
    Until now this stylesheet had NO media queries at all, so phones were served

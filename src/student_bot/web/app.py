@@ -496,13 +496,19 @@ def create_app(cfg: Config | None = None) -> FastAPI:
         session_id: str = "default",
         name: str = "",
     ):
-        """Return the persisted diagnostic payload for a single turn.
+        """Return one turn: its question, answer and diagnostic payload.
 
         A non-admin caller may only fetch their own turns: we re-derive the
         requesting user's `user_id_hash` from session/auth context using the
         same scheme record_qa_debug used at write time, and 403 on mismatch.
         Admins (4th `:admin` field on their web_users line) may fetch any
         qa_id whose row exists.
+
+        `payload` is null when the turn has a qa_log row but no qa_debug row,
+        which is most turns: diagnostics are only stored when "Learn more" was
+        on. The question and answer are still returned, because the admin
+        deep-link from /stats is for reading what a student was told. 404 only
+        when neither row exists.
 
         `session_id` and `name` query params let an anonymous frontend reuse
         the same identifier it sent to /api/chat (where `payload.name`
@@ -522,16 +528,20 @@ def create_app(cfg: Config | None = None) -> FastAPI:
             requester_web_uid = f"web:{effective_name}:{session_id or 'default'}"
         requester_hash = db.hash_user(requester_web_uid)
 
-        row = db.get_qa_debug(qa_id)
-        if row is None:
-            raise HTTPException(404, "no debug data for this qa_id")
-        if row["user_id_hash"] != requester_hash and not ctx.is_admin:
+        debug_row = db.get_qa_debug(qa_id)
+        turn = db.get_qa_turn(qa_id)
+        owner = debug_row or turn
+        if owner is None:
+            raise HTTPException(404, "no such turn")
+        if owner["user_id_hash"] != requester_hash and not ctx.is_admin:
             raise HTTPException(403, "not your data")
         return JSONResponse(
             {
                 "qa_id": qa_id,
-                "ts": row["ts"],
-                "payload": row["payload"],
+                "ts": owner["ts"],
+                "payload": debug_row["payload"] if debug_row else None,
+                "question": turn["question"] if turn else None,
+                "answer": turn["answer"] if turn else None,
             }
         )
 
@@ -995,7 +1005,7 @@ _HEADER_HTML = """\
 # Loaded into <head> on every server-rendered page, before notice.js, so
 # data-i18n attributes are translated before any other scripts run.
 _NOTICE_SCRIPT = (
-    '<script src="{static_prefix}/i18n.js?v=42"></script>'
+    '<script src="{static_prefix}/i18n.js?v=43"></script>'
     '<script src="{static_prefix}/notice.js?v=33" defer></script>'
 )
 
@@ -1033,7 +1043,7 @@ def _about_page(cfg: Config, base_path: str = "") -> HTMLResponse:
     )
     body = f"""
 <!doctype html><html lang="sv"><head><meta charset="utf-8"><title>student-bot</title>
-<link rel="stylesheet" href="{static_prefix}/style.css?v=44">{_FAVICON_LINKS.format(static_prefix=static_prefix)}{_NOTICE_SCRIPT.format(static_prefix=static_prefix)}</head>
+<link rel="stylesheet" href="{static_prefix}/style.css?v=45">{_FAVICON_LINKS.format(static_prefix=static_prefix)}{_NOTICE_SCRIPT.format(static_prefix=static_prefix)}</head>
 <body>{_HEADER_HTML.format(tagline_html="", static_prefix=static_prefix, home=home, branding_html=_branding_logo_html(cfg, static_prefix))}<main>{_notice_html(cfg)}<div class="card">
 <h2 data-i18n="about.h2.what"></h2>
 <p data-i18n="about.what.body"></p>
@@ -1077,7 +1087,7 @@ def _glossary_page(cfg: Config, base_path: str = "") -> HTMLResponse:
     )
     body = f"""
 <!doctype html><html lang="sv"><head><meta charset="utf-8"><title>student-bot</title>
-<link rel="stylesheet" href="{static_prefix}/style.css?v=44">{_FAVICON_LINKS.format(static_prefix=static_prefix)}{_NOTICE_SCRIPT.format(static_prefix=static_prefix)}</head>
+<link rel="stylesheet" href="{static_prefix}/style.css?v=45">{_FAVICON_LINKS.format(static_prefix=static_prefix)}{_NOTICE_SCRIPT.format(static_prefix=static_prefix)}</head>
 <body>{_HEADER_HTML.format(tagline_html='<p class="tagline" data-i18n="glossary.tagline"></p>', static_prefix=static_prefix, home=home, branding_html=_branding_logo_html(cfg, static_prefix))}
 <main>{_notice_html(cfg)}<div class="card">
 <table border="1" cellpadding="6" cellspacing="0" style="width:100%; border-collapse: collapse;">
@@ -1188,7 +1198,7 @@ def _md_doc_page(cfg: Config, docs_dir: Path, rel_source: str, base_path: str = 
 
     body = f"""
 <!doctype html><html lang="sv"><head><meta charset="utf-8"><title>{_h(doc.title)}</title>
-<link rel="stylesheet" href="{static_prefix}/style.css?v=44">{_FAVICON_LINKS.format(static_prefix=static_prefix)}{_NOTICE_SCRIPT.format(static_prefix=static_prefix)}</head>
+<link rel="stylesheet" href="{static_prefix}/style.css?v=45">{_FAVICON_LINKS.format(static_prefix=static_prefix)}{_NOTICE_SCRIPT.format(static_prefix=static_prefix)}</head>
 <body>{_HEADER_HTML.format(tagline_html="", static_prefix=static_prefix, home=home, branding_html=_branding_logo_html(cfg, static_prefix))}
 <main><div class="card md-doc">
 <nav class="md-nav">
@@ -1475,7 +1485,7 @@ def _stats_page(
 
     body = f"""
 <!doctype html><html lang="sv"><head><meta charset="utf-8"><title>student-bot</title>
-<link rel="stylesheet" href="{static_prefix}/style.css?v=44">{_FAVICON_LINKS.format(static_prefix=static_prefix)}{_NOTICE_SCRIPT.format(static_prefix=static_prefix)}</head>
+<link rel="stylesheet" href="{static_prefix}/style.css?v=45">{_FAVICON_LINKS.format(static_prefix=static_prefix)}{_NOTICE_SCRIPT.format(static_prefix=static_prefix)}</head>
 <body>{_HEADER_HTML.format(tagline_html="", static_prefix=static_prefix, home=home, branding_html=_branding_logo_html(cfg, static_prefix))}<main>{_notice_html(cfg)}<div class="card stats-card" data-channel="{channel}" data-is-admin="{1 if is_admin else 0}">
 <h1 data-i18n="stats.title"></h1>
 {channel_switch_html}

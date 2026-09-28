@@ -440,6 +440,28 @@ class LogDB:
             return None
         return {"user_id_hash": row[0], "ts": int(row[1]), "payload": decoded}
 
+    def get_qa_turn(self, qa_id: int) -> dict[str, Any] | None:
+        """Return {"user_id_hash", "ts", "question", "answer"} for a qa_id, or None.
+
+        The text of one turn, for the admin deep-link from /stats. Unlike
+        qa_debug, qa_log has a row for every logged turn, not only those asked
+        with "Learn more" on. The web layer applies the same owner-or-admin
+        check as for the debug payload.
+        """
+        with self._lock, self._connect() as conn:
+            row = conn.execute(
+                "SELECT user_id_hash, ts, question, answer FROM qa_log WHERE id = ?",
+                (qa_id,),
+            ).fetchone()
+        if row is None:
+            return None
+        return {
+            "user_id_hash": row[0],
+            "ts": int(row[1]),
+            "question": row[2] or "",
+            "answer": row[3] or "",
+        }
+
     # --- feedback ---
 
     def record_feedback(

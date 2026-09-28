@@ -20,6 +20,10 @@ const state = {
   // Drives the list in "Så här tänkte boten" (#92), which previously could
   // only ever show the one turn whose 🔍 you last clicked.
   turns: [],
+  // qa_id opened from an admin deep-link on /stats that is not one of this
+  // session's turns (another user's). Listed first, with its question and
+  // answer. Without this, #92's session list silently showed nothing.
+  foreignTurn: null,
   isAdmin: false,
 };
 localStorage.setItem("session_id", state.sessionId);
@@ -1426,7 +1430,11 @@ async function loadDebugTurn(details) {
   details.dataset.loaded = "1";
 
   const t = (k, fallback) => (window.t && window.t(k)) || fallback;
-  let payload = state.debugCache.get(qaId);
+  // Another user's turn is never cached: the cache holds payloads only, and
+  // this entry also needs the question and answer from the same response.
+  const foreign = details.dataset.foreign === "1";
+  let payload = foreign ? null : state.debugCache.get(qaId);
+  let data = null;
 
   if (!payload) {
     body.innerHTML = `<p class="debug-loading">${escapeHtml(t("debug.msg.loading", "Loading…"))}</p>`;
@@ -1449,9 +1457,9 @@ async function loadDebugTurn(details) {
         if (resp.status !== 404) details.dataset.loaded = "";
         return;
       }
-      const data = await resp.json();
+      data = await resp.json();
       payload = data && data.payload;
-      if (payload) state.debugCache.set(qaId, payload);
+      if (payload && !foreign) state.debugCache.set(qaId, payload);
     } catch (e) {
       body.innerHTML = `<p class="debug-error">${escapeHtml(
         t("debug.fetch_error", "Could not load details (error {status}).")
@@ -1462,16 +1470,47 @@ async function loadDebugTurn(details) {
     }
   }
 
-  body.innerHTML = payload
+  let qaHtml = "";
+  if (foreign && data) {
+    const q = details.querySelector(".debug-turn-q");
+    if (q && data.question) q.textContent = data.question;
+    qaHtml = foreignTurnQaHtml(data);
+  }
+  const emptyKey = foreign ? "debug.foreign.nodiag" : "debug.empty";
+  body.innerHTML = qaHtml + (payload
     ? debugPayloadHtml(payload, qaId)
-    : `<p class="debug-empty-inline">${escapeHtml(t("debug.empty", "No diagnostics for this turn."))}</p>`;
+    : `<p class="debug-empty-inline">${escapeHtml(t(emptyKey, "No diagnostics for this turn."))}</p>`);
+}
+
+// The question and the answer as the student saw it, for a turn opened from
+// the /stats inspector. The answer goes through the same renderMarkdown as a
+// chat bubble, so it reads the way it did for them.
+function foreignTurnQaHtml(data) {
+  const t = (k, fallback) => (window.t && window.t(k)) || fallback;
+  const when = data.ts ? new Date(data.ts * 1000).toLocaleString() : "";
+  return (
+    `<div class="debug-foreign-qa">` +
+    `<p class="debug-foreign-meta">${escapeHtml(t("debug.foreign.note", "Another user's turn"))}` +
+    (when ? ` · ${escapeHtml(when)}` : "") +
+    `</p>` +
+    `<h4>${escapeHtml(t("debug.foreign.question", "Question"))}</h4>` +
+    `<p class="debug-foreign-q">${escapeHtml(data.question || "")}</p>` +
+    `<h4>${escapeHtml(t("debug.foreign.answer", "Answer"))}</h4>` +
+    `<div class="debug-foreign-a">${renderMarkdown(data.answer || "")}</div>` +
+    `</div>`
+  );
 }
 
 function renderDebugTurns() {
   if (!debugPanelBody) return;
   const t = (k, fallback) => (window.t && window.t(k)) || fallback;
 
-  if (!state.turns.length) {
+  const foreign =
+    state.foreignTurn && !state.turns.some((x) => String(x.qaId) === state.foreignTurn)
+      ? state.foreignTurn
+      : null;
+
+  if (!state.turns.length && !foreign) {
     debugPanelBody.innerHTML = "";
     if (debugPanelEmpty) {
       debugPanelEmpty.textContent = t("debug.noturns", "Ask a question first.");
@@ -1498,6 +1537,19 @@ function renderDebugTurns() {
         `</details>`
       );
     });
+  if (foreign) {
+    // The summary starts with a placeholder; loadDebugTurn replaces it with
+    // the question once the turn has been fetched.
+    items.unshift(
+      `<details class="debug-turn debug-turn-foreign" data-qa-id="${escapeHtml(foreign)}" data-foreign="1">` +
+      `<summary class="debug-turn-head">` +
+      `<span class="debug-turn-n">#${escapeHtml(foreign)}</span>` +
+      `<span class="debug-turn-q">${escapeHtml(t("debug.foreign.title", "Another user's turn"))}</span>` +
+      `</summary>` +
+      `<div class="debug-turn-body" id="${debugTurnBodyId(foreign)}"></div>` +
+      `</details>`
+    );
+  }
   debugPanelBody.innerHTML = `<div class="debug-turns">${items.join("")}</div>`;
 
   debugPanelBody.querySelectorAll(".debug-turn").forEach((details) => {
@@ -1510,6 +1562,9 @@ function renderDebugTurns() {
 function showDebugPanel(qaId) {
   if (!debugPanel || !debugPanelBody) return;
   setView("debug");
+  if (qaId && !state.turns.some((x) => String(x.qaId) === String(qaId))) {
+    state.foreignTurn = String(qaId);
+  }
   renderDebugTurns();
   if (!qaId) return;
   const target = debugPanelBody.querySelector(
