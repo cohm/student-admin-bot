@@ -26,7 +26,7 @@ def test_the_default_resolves():
 
 
 def test_the_deck_names_the_active_model():
-    """`CLAUDE.md` flags the deck as drift-prone, and the model name is one of
+    """`AGENTS.md` flags the deck as drift-prone, and the model name is one of
     the facts it hard-codes."""
     model_id = get_config().active_model().model_id
     assert model_id in DECK, f"deck does not mention {model_id}"

@@ -34,7 +34,7 @@
 #     KTH_OIDC_ENABLED is true.
 #
 # WHAT IT DELIBERATELY DOES NOT DO
-#   No reindex. `scripts/reindex.py` is manual by design (CLAUDE.md), takes
+#   No reindex. `scripts/reindex.py` is manual by design (AGENTS.md), takes
 #   minutes, and rewrites the vector index — not something a deploy should do
 #   behind your back. The script tells you when the incoming range touches
 #   ingest code and leaves the decision to you.
