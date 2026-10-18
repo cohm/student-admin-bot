@@ -166,6 +166,9 @@ el("#reset").addEventListener("click", async () => {
   // The debug list mirrors the transcript, so clearing one clears the other —
   // otherwise "Börja om" leaves the previous conversation's turns listed.
   state.turns = [];
+  // A turn opened from /stats is listed alongside the session's own, so it
+  // goes too.
+  state.foreignTurn = null;
   state.debugCache.clear();
   if (document.body.classList.contains("viewing-debug")) renderDebugTurns();
   refreshExportButton();
@@ -1182,7 +1185,10 @@ function renderMarkdown(text) {
   // - **bold**, _italic_, links
   //
   // Intentionally *not* a full markdown parser; keep deterministic and safe.
-  const esc = (s) => (s || "").replace(/[&<>]/g, (c) => ({ "&": "&amp;", "<": "&lt;", ">": "&gt;" }[c]));
+  //
+  // Quotes must be escaped too: link URLs land inside href="...", and the
+  // text rendered here can be model output from another user's turn (#147).
+  const esc = escapeAttr;
 
   const renderInline = (s) => {
     let out = esc(s);
