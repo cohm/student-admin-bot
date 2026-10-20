@@ -46,7 +46,7 @@ from student_bot.bot.citations import (
     format_source_display_label,
 )
 from student_bot.bot.memory import ConversationMemory
-from student_bot.bot.pipeline import answer, remember_turn
+from student_bot.bot.pipeline import answer, remember_turn, turn_priors
 from student_bot.bot.topics import classify
 from student_bot.config import Config, get_config
 from student_bot.jargon import Jargon, _nfc_lower, _read_json, _write_json
@@ -586,10 +586,7 @@ def _stream_answer(
 ):
     """Generator producing SSE blocks. Streams answer tokens and a final
     `meta` event with confidence, qa_id, and gate info."""
-    history = memory.get(web_user_id, "default")
-    program_prior = memory.get_program_code(web_user_id, "default")
-    adm_term_prior, adm_year_prior = memory.get_admission_hints(web_user_id, "default")
-    pending_prior = memory.get_pending_question(web_user_id, "default")
+    priors = turn_priors(memory, web_user_id, "default")
     session_expired = memory.take_expired_flag(web_user_id, "default")
 
     queue: asyncio.Queue = asyncio.Queue()
@@ -608,18 +605,14 @@ def _stream_answer(
         try:
             result = answer(
                 payload.question,
-                history=history,
                 cfg=cfg,
                 on_token=on_token,
                 on_jargon_prefix=on_jargon_prefix,
                 on_thinking=on_thinking,
                 rate_limit_key=web_user_id,
-                program_prior=program_prior,
-                admission_term_prior=adm_term_prior,
-                admission_year_prefix_prior=adm_year_prior,
                 channel="web",
                 learn_more=bool(payload.learn_more),
-                pending_question_prior=pending_prior,
+                **priors,
             )
             result.session_expired = session_expired
         except Exception as e:

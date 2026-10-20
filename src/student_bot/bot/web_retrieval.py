@@ -150,6 +150,9 @@ class AdmissionHints:
     exact_term: str | None = None  # five-digit KTH programme period, e.g. 20242
     year_prefix: str | None = None  # antagningsår / HT|VT year, e.g. 2024
 
+    def __bool__(self) -> bool:
+        return bool(self.exact_term or self.year_prefix)
+
 
 @dataclass
 class ProgrammeRootResolution:
@@ -438,11 +441,8 @@ def parse_program_admission_hints(q: str) -> AdmissionHints:
     return AdmissionHints()
 
 
-# First words of a question. A reply that starts with one and has a "?" asks
-# something new, whatever form its year has ("När är omtentan VT2026?").
-# Without a "?" it can still be an answer ("När jag började var det HT2022").
-# Verbs are left out on purpose: an answer often starts with one ("Antogs
-# 2025", "Började 2025"). So is "var", which means both "where" and "was".
+# First words of a question. Verbs are left out on purpose: an answer often
+# starts with one ("Antogs 2025"). So is "var", which is both "where" and "was".
 _QUESTION_WORDS = frozenset(
     "vad vilka vilken vilket när hur varför vem vems vart "
     "what which when how why who whom whose where".split()
@@ -450,24 +450,17 @@ _QUESTION_WORDS = frozenset(
 
 
 def reply_admission_hints(reply: str) -> AdmissionHints:
-    """The admission year a student's reply to a clarification states. Only
-    called right after one. A reply that starts with a question word and has a
-    "?" asks something new and gives none ("När är omtentan VT2026?").
-    Otherwise a year in a form the parser knows counts ("HT22", "hösten 2022",
-    "När jag började var det HT2022"), also when a question follows it
-    ("HT2022, vilka kurser blir det då?"). A bare year is a weaker signal. It
-    counts when it is the reply's only year and the reply neither starts with a
-    question word nor has a "?" ("år 2023 var det"), or stands alone ("2023?").
-    The pipeline hands this to the router as the admission year, so the newest
-    reply wins over any year earlier in the joined question, whatever form
-    either is written in."""
+    """The admission year a student's reply to a clarification states, or empty
+    hints. A reply that starts with a question word and has a "?" is a new
+    question. A bare year counts when it is the reply's only year and the reply
+    is not a question ("år 2023 var det", "2023?"). Cases: tests/test_dynamic_web.py."""
     text = (reply or "").strip()
     words = re.findall(r"\w+", text.lower())
     starts_as_question = bool(words) and words[0] in _QUESTION_WORDS
     if starts_as_question and "?" in text:
         return AdmissionHints()
     hints = parse_program_admission_hints(text)
-    if hints.exact_term or hints.year_prefix:
+    if hints:
         return hints
     years = set(re.findall(r"\b(20\d{2})\b", text))
     bare_year_alone = re.fullmatch(r"20\d{2}\W*", text)
@@ -526,8 +519,7 @@ def merge_programme_clarification_followup(
 
     qstrip = question.strip()
     if is_round:
-        hints = reply_admission_hints(question)
-        if not (hints.exact_term or hints.year_prefix):
+        if not reply_admission_hints(question):
             return question
     else:
         # Program pick: require either a 5-letter code or an explicit "I mean X"
@@ -2636,9 +2628,7 @@ def _select_programme_urls(
             clarification_en=_clarify_program_terms_en(program_code, terms),
         )
     else:
-        # A five-digit term the programme doesn't have (the one it has routed
-        # above). Asked about like a year with no admission, not as "several
-        # rounds match the year None".
+        # A five-digit term the programme does not have: ask like a year with no admission.
         cands = []
 
     if len(cands) == 1:
@@ -2939,16 +2929,12 @@ def maybe_fetch_dynamic_web(
         return None
     log.info("dynamic-web: targets=%s", targets)
 
-    override = admission_hints_override
-    if override and (override.exact_term or override.year_prefix):
-        hints = override
-    else:
-        hints = parse_program_admission_hints(question)
+    hints = admission_hints_override or parse_program_admission_hints(question)
     # Fall back to a persisted admission hint when this turn doesn't carry
     # one. A user who clarified "HT2024" three turns ago shouldn't have to
     # repeat it on every follow-up. The prior is only used when this turn's
     # own parse came back empty — a fresh hint always wins.
-    if not (hints.exact_term or hints.year_prefix):
+    if not hints:
         if admission_term_prior:
             hints = AdmissionHints(exact_term=admission_term_prior)
         elif admission_year_prefix_prior:

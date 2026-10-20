@@ -234,13 +234,10 @@ llm:
       thinking_style: openai_reasoning_field
 
 memory:
-  # 4 → 8 (#47), then 8 → 12 once a clarified question started taking one
-  # pair instead of one per clarification (`remember_turn`). Stored answers
-  # are the model text only, so the 4 extra pairs are a small part of the
-  # prompt. Every token is prefill the student waits for, and `num_ctx` is not
-  # sent on the LiteLLM path: the gateway host's window must hold the largest
-  # prompt. The `chat.history_truncated` notice still fires when this cap is
-  # reached, so users learn that the LLM has stopped seeing turn 1.
+  # 4 → 8 (#47), then 8 → 12 once a clarified question takes one pair instead
+  # of one per clarification (`remember_turn`). Stored answers are the model
+  # text only, so the extra pairs are a small part of the prompt. `num_ctx` is
+  # not sent on the LiteLLM path: the gateway host's window must hold it.
   max_turns: 12                  # last N user/assistant pairs per (user, thread)
   ttl_minutes: 30
 

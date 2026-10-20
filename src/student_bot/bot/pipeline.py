@@ -390,13 +390,9 @@ class AnswerResult:
     # fires once per pruned slot (TTL boundary crossed since last turn).
     history_truncated: bool = False
     session_expired: bool = False
-    # Set when this turn asked a clarification on behalf of a question: callers
-    # store it (`ConversationMemory.set_pending_question`) and pass it back as
-    # `pending_question_prior` next turn. None clears it.
-    pending_question: str | None = None
     # The full question when this turn folded a clarification reply into the
     # question it answered. `remember_turn` stores it in place of the
-    # clarification pair.
+    # clarification pair, and as the pending question if this turn asked again.
     merged_question: str | None = None
     # Per-stage wall-clock breakdown (#19 diagnostics). chroma_ms covers
     # query embed + Chroma lookup (CPU); rerank_ms covers the cross-encoder
@@ -414,12 +410,17 @@ class AnswerResult:
     debug_payload: dict[str, Any] | None = None
 
 
-def keep_in_history(result: AnswerResult) -> bool:
-    """Whether a turn belongs in conversation memory. One rule for every frontend;
-    clarifications are kept so the reply is read in their context."""
-    return (
-        result.answered or result.meta_fallback or result.gate.reason == "programme_clarification"
-    )
+def turn_priors(memory: ConversationMemory, user_id: str, root_id: str) -> dict[str, Any]:
+    """What earlier turns established, as keyword arguments for `answer`. The
+    read-side counterpart of `remember_turn`, shared by every frontend."""
+    term, year = memory.get_admission_hints(user_id, root_id)
+    return {
+        "history": memory.get(user_id, root_id),
+        "program_prior": memory.get_program_code(user_id, root_id),
+        "admission_term_prior": term,
+        "admission_year_prefix_prior": year,
+        "pending_question_prior": memory.get_pending_question(user_id, root_id),
+    }
 
 
 def remember_turn(
@@ -431,17 +432,17 @@ def remember_turn(
     clarification pair with one pair holding the whole question, so a question
     costs one turn of memory however many clarifications it took. Sets
     `result.history_truncated` from the post-turn state."""
-    if keep_in_history(result):
+    clarified = result.gate.reason == "programme_clarification"
+    if result.answered or result.meta_fallback or clarified:
         if result.merged_question:
             memory.replace_last_pair(user_id, root_id, result.merged_question, result.answer)
         else:
             memory.append(user_id, root_id, "user", question)
             memory.append(user_id, root_id, "assistant", result.answer)
-        # The pending question lives exactly as long as the clarification it
-        # belongs to is the last stored turn. A turn that is not stored (refused
-        # input, unknown programme code, kth.se down, LLM error) leaves both in
-        # place, so the student's retry is still read as the reply.
-        memory.set_pending_question(user_id, root_id, result.pending_question)
+        # Lives as long as the clarification is the last stored turn. A turn that
+        # is not stored leaves it in place, so the student's retry is still a reply.
+        pending = (result.merged_question or question) if clarified else None
+        memory.set_pending_question(user_id, root_id, pending)
     if result.program_code:
         memory.set_program_code(user_id, root_id, result.program_code)
     if result.admission_term or result.admission_year_prefix:
@@ -835,11 +836,8 @@ def answer(
             rate_limited=True,
         )
 
-    # Only right after a real clarification (it left a pending question). The
-    # text detectors behind the merge also match an ordinary answer that
-    # mentions "antagningsomgång": merging there fused a reply like "Förlåt,
-    # jag menar HT2024" with the previous question and routed it to the old
-    # admission year.
+    # Only right after a real clarification: the text detectors behind the merge
+    # also match an ordinary answer that mentions "antagningsomgång".
     contextual_q = (
         merge_programme_clarification_followup(
             question, history, cfg, pending_question=pending_question_prior
@@ -849,13 +847,10 @@ def answer(
     )
     programme_followup_merged = contextual_q != question
     merged_question = contextual_q if programme_followup_merged else None
-    # The admission year the reply states, if any. The router uses it over any year
-    # earlier in the joined text, so the newest answer decides.
-    reply_admission = reply_admission_hints(question) if programme_followup_merged else None
-    if reply_admission is not None and not (
-        reply_admission.exact_term or reply_admission.year_prefix
-    ):
-        reply_admission = None
+    # The admission year the reply states wins over any year earlier in the joined text.
+    reply_admission = (
+        (reply_admission_hints(question) or None) if programme_followup_merged else None
+    )
     history_for_llm = history_without_programme_clarification_tail(
         history, programme_followup_merged
     )
@@ -908,19 +903,10 @@ def answer(
         glossary_md = _glossary_with_codes(
             glossary_md, lang, _resolve_program_codes(cfg, resolved_program_code.upper(), lang)
         )
-    # Design decision: one admission year is in focus at a time, the one the
-    # conversation is currently about. It need not be the student's own: people
-    # ask about a friend's programme or older rules too. An admission year counts
-    # only when it picked a programme's study plan this turn, and then it
-    # replaces the stored one (`remember_turn` stores it with `replace=True`).
-    # So "Jag började HT2023, vilka kurser har jag i årskurs 2?" and "vad gällde
-    # för de som började HT2023 på CTFYS?" both move the conversation to HT2023.
-    # So does a semester in a message the router sends to the stored programme's
-    # plan ("valfria kurser i årskurs 3 VT2025?"), the accepted cost. A
-    # course-only fetch reports the parsed hints too and does not count, and
-    # neither does a message that routes to no study plan: a bare "Förlåt, jag
-    # menar HT2024" changes nothing until the admission year is used for a
-    # programme again.
+    # One admission year is in focus at a time: the one the conversation is about,
+    # which need not be the student's own. It counts only when it picked a
+    # programme's study plan this turn, and then replaces the stored one
+    # (`remember_turn`, replace=True). Cases: tests/test_clarification_memory.py.
     routed_programme = bool(web_result and resolved_program_code)
     applied_admission_term = web_result.applied_admission_term if routed_programme else None
     applied_admission_year_prefix = (
@@ -937,13 +923,9 @@ def answer(
         msg = web_result.clarification[0] if lang == "sv" else web_result.clarification[1]
         if on_token:
             on_token(msg)
-        # An admission year the student just gave that the programme doesn't have is not
-        # kept: the pending question and the stored pair stay as they were, so
-        # the rejected year never reaches memory, the next joined text or the
-        # prompt (left in, the model answered with the wrong courses). Only
-        # for a reply to the admission year question: a programme pick that also names
-        # a missing year ("CTFYS, jag började 2019") keeps the pick, and the
-        # next reply's admission year still decides the routing.
+        # A reply to the admission year question naming a year the programme does
+        # not have is dropped: pending question and stored pair stay as they were.
+        # A programme pick that also names a missing year keeps the pick.
         if (
             reply_admission
             and web_result.admission_not_found
@@ -962,7 +944,6 @@ def answer(
             expanded_question=expanded_q,
             jargon_hits=jargon_hits,
             program_code=resolved_program_code,
-            pending_question=contextual_q,
             merged_question=merged_question,
         )
     if web_result and web_result.missing_kth_course:
@@ -1449,7 +1430,6 @@ def _repl(cfg: Config, console: Console, *, show_context: bool):
             console.print("[dim]conversation memory cleared[/dim]")
             continue
 
-        history = memory.get(user_id, thread_id)
         if show_context:
             from student_bot.bot.retrieval import retrieve as _rt
 
@@ -1464,20 +1444,13 @@ def _repl(cfg: Config, console: Console, *, show_context: bool):
             sys.stdout.flush()
             printed_any = True
 
-        program_prior = memory.get_program_code(user_id, thread_id)
-        adm_term_prior, adm_year_prior = memory.get_admission_hints(user_id, thread_id)
-        pending_prior = memory.get_pending_question(user_id, thread_id)
         session_expired = memory.take_expired_flag(user_id, thread_id)
         result = answer(
             q,
-            history=history,
             cfg=cfg,
             on_token=on_tok,
-            program_prior=program_prior,
-            admission_term_prior=adm_term_prior,
-            admission_year_prefix_prior=adm_year_prior,
             channel="cli",
-            pending_question_prior=pending_prior,
+            **turn_priors(memory, user_id, thread_id),
         )
         result.session_expired = session_expired
         if printed_any:

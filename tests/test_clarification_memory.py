@@ -18,7 +18,7 @@ import student_bot.bot.pipeline as pipeline
 from student_bot.bot import web_retrieval as wr
 from student_bot.bot.gate import GateDecision
 from student_bot.bot.memory import ConversationMemory
-from student_bot.bot.pipeline import AnswerResult, answer, remember_turn
+from student_bot.bot.pipeline import AnswerResult, answer, remember_turn, turn_priors
 from student_bot.bot.retrieval import RetrievalResult
 from student_bot.bot.web_retrieval import WebFetchResult
 from student_bot.config import get_config
@@ -69,17 +69,8 @@ def router(monkeypatch):
 
 
 def _turn(cfg, memory: ConversationMemory, question: str) -> AnswerResult:
-    """One turn the way the frontends run it: priors in, `remember_turn` out."""
-    term_prior, year_prior = memory.get_admission_hints("u", "t")
-    result = answer(
-        question,
-        history=memory.get("u", "t"),
-        cfg=cfg,
-        program_prior=memory.get_program_code("u", "t"),
-        admission_term_prior=term_prior,
-        admission_year_prefix_prior=year_prior,
-        pending_question_prior=memory.get_pending_question("u", "t"),
-    )
+    """One turn the way the frontends run it: `turn_priors` in, `remember_turn` out."""
+    result = answer(question, cfg=cfg, **turn_priors(memory, "u", "t"))
     remember_turn(memory, "u", "t", question, result)
     return result
 
