@@ -5,12 +5,24 @@ Usage:
   uv run student-bot-backup --only chroma        # vector index only
   uv run student-bot-backup --out /tmp           # somewhere else
   uv run student-bot-backup --verify FILE.tar.gz # re-check an archive's checksums
+  uv run student-bot-backup --restore FILE.tar.gz # put that archive's index back in data/chroma
 
 On a host without uv (prod), run the same thing in the container. `./data` is
 bind-mounted, so archives land on the host, and `--verify` takes the same
 repo-relative path:
   docker compose run --rm -T web student-bot-backup
   docker compose run --rm -T web student-bot-backup --verify data/backups/FILE.tar.gz
+  docker compose run --rm -T web student-bot-backup --restore data/backups/FILE.tar.gz
+
+`--restore` is the counterpart of the `--only chroma` snapshot: it verifies the
+archive, unpacks it next to `data/chroma`, and swaps the directories. Only
+`chroma` is restored; the SQLite components of a full archive hold the
+irreplaceable data and are left for a deliberate manual copy. The replaced
+index is removed, not kept: `data/chroma` can always be rebuilt from the
+corpus, so the cost of a wrong `--restore` is a reindex, not data. Stop the
+services first and start them after — a running process keeps serving the
+segment it loaded at startup either way. The weekly report prints the three
+commands.
 
 SQLite files (`chroma.sqlite3`, `logs.sqlite`, `web_cache.sqlite`) are copied
 with SQLite's online backup API, so the running stack does not have to be
@@ -103,18 +115,30 @@ def verify_hints(target: Path, root: Path = PROJECT_ROOT) -> list[str]:
     ]
 
 
+def _read_manifest(tar: tarfile.TarFile) -> tuple[str, dict] | None:
+    """(prefix, manifest) for an archive we wrote, or None if it has no MANIFEST.json.
+
+    `prefix` is the top-level folder every member sits under (`<name>/`): the
+    archive is written with `arcname=name`, so a member's path inside the
+    tarball is `prefix + rel` for each `rel` in the manifest.
+    """
+    manifest_name = next((n for n in tar.getnames() if n.endswith("MANIFEST.json")), None)
+    if manifest_name is None:
+        return None
+    prefix = manifest_name[: -len("MANIFEST.json")]
+    return prefix, json.load(tar.extractfile(manifest_name))
+
+
 def _verify(console: Console, archive: Path) -> int:
     if not archive.exists():
         console.print(f"[red]no such archive: {archive}[/red]")
         return 1
     with tarfile.open(archive, "r:gz") as tar:
-        names = tar.getnames()
-        manifest_name = next((n for n in names if n.endswith("MANIFEST.json")), None)
-        if manifest_name is None:
+        found = _read_manifest(tar)
+        if found is None:
             console.print("[red]archive has no MANIFEST.json — cannot verify[/red]")
             return 1
-        prefix = manifest_name[: -len("MANIFEST.json")]
-        manifest = json.load(tar.extractfile(manifest_name))
+        prefix, manifest = found
         bad = 0
         for rel, meta in manifest["files"].items():
             member = tar.extractfile(prefix + rel)
@@ -135,6 +159,100 @@ def _verify(console: Console, archive: Path) -> int:
         console.print(f"[red]{bad} file(s) failed verification[/red]")
         return 1
     console.print(f"[green]all {len(manifest['files'])} files verified[/green]")
+    return 0
+
+
+def _restore(console: Console, archive: Path, chroma_dir: Path) -> int:
+    """Replace `chroma_dir` with the `chroma/` tree inside `archive`.
+
+    Order matters: verify, unpack to a sibling of `chroma_dir` (same
+    filesystem, so the swap is two renames), and only then touch the live
+    directory. Every failure before the swap leaves the live index exactly as
+    it was and nothing behind on disk; a failed swap puts the old directory
+    back. The replaced index is deleted rather than kept beside the new one —
+    it is rebuildable from the corpus with `scripts.reindex`, so a wrong
+    restore costs a reindex, not data. Only `chroma` is restored.
+
+    Running services are not restarted here (nothing inside the container can
+    do that); the caller stops them first and starts them after.
+    """
+    if _verify(console, archive) != 0:
+        console.print("[red]refusing to restore an archive that does not verify[/red]")
+        return 1
+
+    # A symlinked data/chroma: operate on the directory it points at, so the
+    # link survives and keeps pointing at the restored index.
+    chroma_dir = chroma_dir.resolve()
+    stamp = datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%S")
+    # Both names match the `data/chroma-*/` gitignore rule, so a leftover from
+    # an interrupted run cannot dirty the prod checkout.
+    staging = chroma_dir.parent / f"chroma-restore-{stamp}"
+    replaced = chroma_dir.parent / f"chroma-replaced-{stamp}"
+
+    with tarfile.open(archive, "r:gz") as tar:
+        prefix, manifest = _read_manifest(tar)  # verified above, so present
+        components = list(manifest.get("components", []))
+        if "chroma" not in components:
+            console.print(
+                f"[red]archive has no chroma component (components: "
+                f"{', '.join(components) or 'none'})[/red]"
+            )
+            return 1
+        members = [m for m in tar.getmembers() if m.name.startswith(prefix + "chroma/")]
+        if not members:
+            console.print(
+                "[red]archive lists chroma in its manifest but holds no chroma/ files[/red]"
+            )
+            return 1
+        wrote, running = str(manifest.get("chromadb", "")), _package_version("chromadb")
+        if wrote.split(".")[0] != running.split(".")[0]:
+            console.print(
+                f"[yellow]archive written by chromadb {wrote}, this client is {running}: "
+                "a different major version opens the index by migrating it in place "
+                "(see README, Image notes) — make sure that is what you want[/yellow]"
+            )
+        try:
+            staging.mkdir(parents=True)
+            # `filter="data"` (3.11.4+) refuses absolute paths, `..` and links
+            # that escape `staging`; none of ours do, but the archive came from
+            # disk. Older 3.11 patch releases raise TypeError on the keyword;
+            # catching it here keeps the "nothing left behind" promise there too.
+            tar.extractall(path=staging, members=members, filter="data")
+        except (OSError, tarfile.TarError, TypeError) as e:
+            shutil.rmtree(staging, ignore_errors=True)
+            console.print(f"[red]unpack failed — live index unchanged: {e}[/red]")
+            return 1
+
+    src = staging.joinpath(*(part for part in prefix.split("/") if part), "chroma")
+    try:
+        if chroma_dir.exists():
+            chroma_dir.rename(replaced)
+        src.rename(chroma_dir)
+    except OSError as e:
+        if replaced.exists() and not chroma_dir.exists():
+            replaced.rename(chroma_dir)
+        shutil.rmtree(staging, ignore_errors=True)
+        console.print(f"[red]swap failed — live index unchanged: {e}[/red]")
+        return 1
+
+    # The swap is done: say so before any cleanup, so the caller can tell a
+    # restored index with leftovers from a restore that never happened.
+    files = sum(1 for m in members if m.isfile())
+    console.print(f"[green]restored[/green] {chroma_dir} from {archive.name} ({files} files)")
+    for leftover in (staging, replaced):
+        shutil.rmtree(leftover, ignore_errors=True)
+        if leftover.exists():
+            console.print(f"[yellow]could not remove {leftover} — remove it by hand[/yellow]")
+    skipped = [c for c in components if c != "chroma"]
+    if skipped:
+        console.print(
+            f"not restored: {', '.join(skipped)} (logs.sqlite / web_cache.sqlite are left "
+            "for a deliberate manual copy)"
+        )
+    # `restart`, not `up -d`: `up -d` is a no-op on services that were never
+    # stopped, and a running process keeps serving the index it loaded at
+    # startup — the swap would then be invisible.
+    console.print("services load it only on (re)start: docker compose restart web mattermost")
     return 0
 
 
@@ -198,12 +316,23 @@ def archives_to_prune(existing: list[str], keep: int) -> list[str]:
     default=None,
     help="Verify an existing archive against its MANIFEST.json and exit.",
 )
+@click.option(
+    "--restore",
+    "restore_path",
+    type=click.Path(dir_okay=False, path_type=Path),
+    default=None,
+    help=(
+        "Replace data/chroma with the index in this archive (verified first) and exit. "
+        "Stop the services before, start them after."
+    ),
+)
 def main(
     only: tuple[str, ...],
     out: Path | None,
     no_archive: bool,
     keep: int,
     verify_path: Path | None,
+    restore_path: Path | None,
 ):
     console = Console()
     if verify_path is not None:
@@ -211,6 +340,8 @@ def main(
 
     cfg = get_config()
     chroma_dir = cfg.absolute(cfg.paths.chroma_dir)
+    if restore_path is not None:
+        sys.exit(_restore(console, restore_path, chroma_dir))
     logs_db = cfg.absolute(cfg.paths.logs_db)
     cache_db = logs_db.parent / CACHE_DB_NAME
     wanted = set(only) if only else set(COMPONENTS)

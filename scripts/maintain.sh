@@ -124,6 +124,17 @@ warn() { printf '[maintain] WARNING: %s\n' "$*" >&2; }
 step() { printf '\n=== %s (%s)\n' "$*" "$(date '+%H:%M:%S')"; }
 die()  { printf '\n[maintain] FATAL: %s\n' "$*" >&2; notify_failure "$*"; exit 1; }
 
+# The restore command for the report and the failure messages. It runs in the
+# container because data/chroma is root-owned on the host, and it is
+# `student-bot-backup --restore` rather than a tar line because the archive
+# has a top-level folder: the plain `tar -xzf … -C data` this used to print
+# unpacked BESIDE data/chroma and restored nothing. `;` not `&&`, so a refused
+# restore still brings the services back up on whatever is there.
+restore_hint() {
+  printf 'docker compose stop %s; docker compose run --rm -T web student-bot-backup --restore %s; docker compose up -d %s' \
+    "$SERVICES" "${RESTORE_HINT:-data/backups/<newest chroma archive>}" "$SERVICES"
+}
+
 STARTED_EPOCH=$(date +%s)
 STAMP="$(date -u +%Y%m%dT%H%M%SZ)"
 
@@ -299,8 +310,7 @@ t0=$(date +%s)
 REINDEX_LOG="$MAINT_DIR/reindex-$STAMP.log"
 if ! dc run --rm -T web python -m scripts.reindex 2>&1 | tee "$REINDEX_LOG"; then
   die "reindex failed. The index may be half-written; restore with:
-    tar -xzf ${RESTORE_HINT:-data/backups/<newest chroma archive>} -C data
-    docker compose restart $SERVICES"
+    $(restore_hint)"
 fi
 REINDEX_S=$(( $(date +%s) - t0 ))
 # The summary line is `upserted=N deleted=M collection_size=K`.
@@ -314,8 +324,7 @@ step "Eval after reindex"
 t0=$(date +%s)
 dc run --rm -T web python -m eval.run_eval --json-out "$c_after" \
   || die "post-reindex eval failed to run. Index is the NEW one; restore with:
-    tar -xzf ${RESTORE_HINT:-data/backups/<newest chroma archive>} -C data
-    docker compose restart $SERVICES"
+    $(restore_hint)"
 EVAL_AFTER_S=$(( $(date +%s) - t0 ))
 
 # ---------------------------------------------------------------------------
@@ -453,8 +462,7 @@ fi
   [[ -n "$DEADLINE_NOTE" ]] && printf '%s\n' "$DEADLINE_NOTE"
   if (( VERDICT >= 2 )); then
     printf '\nRestore the previous index if this looks wrong:\n'
-    printf '```\ntar -xzf %s -C data\ndocker compose restart %s\n```\n' \
-      "${RESTORE_HINT:-data/backups/<newest chroma archive>}" "$SERVICES"
+    printf '```\n%s\n```\n' "$(restore_hint)"
   fi
 } > "$REPORT"
 

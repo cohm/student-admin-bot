@@ -415,7 +415,20 @@ already on disk. Staging it elsewhere and promoting only on green is the
 stricter design, but it doubles the index on a 30 GB VM that has already
 filled once — and the failure it guards against is recoverable in seconds from
 the step-2 snapshot. So the job never decides to roll back on its own; it puts
-the exact restore command in the report.
+the exact restore command in the report:
+
+```bash
+docker compose stop web mattermost; docker compose run --rm -T web student-bot-backup --restore data/backups/student-bot-backup-chroma-<stamp>.tar.gz; docker compose up -d web mattermost
+```
+
+`--restore` verifies the archive's checksums before it touches anything, then
+replaces `data/chroma`; the index being replaced is removed, not kept. It runs
+in the container because `data/chroma` is root-owned on the host, and the
+archive path is repo-relative under `data/` because that is the one directory
+the container sees. The services are stopped around it so nothing is reading
+the index while it is swapped, and `up -d` rather than `restart` because they
+are down. `;` rather than `&&` on purpose: a refused restore must still bring
+the services back up on whatever is there.
 
 Exit codes, which also set the notification's severity. The headline is the
 eval's verdict on the index, so a run whose only warning is a study-plan cache
@@ -570,11 +583,13 @@ uv run student-bot-backup                       # chroma + logs + web cache
 uv run student-bot-backup --only chroma         # vector index only
 uv run student-bot-backup --out /tmp            # write elsewhere
 uv run student-bot-backup --verify data/backups/FILE.tar.gz  # re-check checksums (also works on the receiving end)
+uv run student-bot-backup --restore data/backups/FILE.tar.gz # put that archive's chroma/ back as data/chroma
 
 # without uv (prod) — the same, in the container
 docker compose run --rm -T web student-bot-backup
 docker compose run --rm -T web student-bot-backup --only chroma
 docker compose run --rm -T web student-bot-backup --verify data/backups/FILE.tar.gz
+docker compose run --rm -T web student-bot-backup --restore data/backups/FILE.tar.gz   # stop web mattermost first, up -d after
 ```
 
 In the container form, keep archive paths **repo-relative** (`data/backups/…`):
@@ -625,9 +640,19 @@ Notes:
   and `scp` are fine; removing one by hand needs `sudo`.
 - Full archives contain `qa_log` student text and must stay on this host. The
   script prints a warning to that effect on every run.
-- Restore is a plain extract; verify first:
-  `docker compose run --rm -T web student-bot-backup --verify data/backups/<archive>`
-  (or `uv run student-bot-backup --verify …` where uv exists).
+- Restore with `student-bot-backup --restore data/backups/<archive>`, in the
+  container on prod with the services stopped around it (the weekly report
+  prints the exact three commands), or `uv run student-bot-backup --restore …`
+  where uv exists. **Not a plain extract:** a `student-bot-backup` archive has
+  a top-level folder, so `tar -xzf … -C data` lands *beside* `data/chroma` and
+  restores nothing. `--restore` verifies the checksums first and refuses before
+  touching the live index if they do not match. Only `chroma` is restored;
+  `logs.sqlite` and `web_cache.sqlite` in a full archive are left for a manual
+  copy, since those hold the irreplaceable data and deserve a look before being
+  overwritten. The plain-`tar` snapshots that `scripts/deploy.sh` takes before
+  a deploy (and recipe (c) below) are the other kind: no top folder, no
+  manifest, and for those `tar -xzf <archive> -C data` is the right command and
+  `--restore` refuses them.
 
 ### ⚠️ Which parts may leave the host
 
@@ -669,10 +694,8 @@ scp cohm@chatbot:'~/student-admin-bot/data/backups/student-bot-backup-chroma-*.t
 On the receiving side:
 
 ```bash
-uv run student-bot-backup --verify student-bot-backup-chroma-*.tar.gz
-tar -xzf student-bot-backup-chroma-*.tar.gz
-cp -R data/chroma data/chroma.bak          # keep their own index first
-rm -rf data/chroma && mv student-bot-backup-chroma-*/chroma data/chroma
+cp -R data/chroma data/chroma.bak          # keep their own index first; --restore removes what it replaces
+uv run student-bot-backup --restore student-bot-backup-chroma-*.tar.gz   # verifies, then swaps data/chroma
 uv run student-bot-cli "Vem är programansvarig för CTFYS?"
 ```
 
@@ -680,10 +703,10 @@ If the receiving side runs Docker only, put the archive under `data/backups/`
 first (the container sees nothing else), then:
 
 ```bash
-docker compose run --rm -T web student-bot-backup --verify data/backups/student-bot-backup-chroma-<stamp>.tar.gz
-# extract and swap data/chroma as above, then:
+docker compose stop web mattermost         # running services keep the old index in memory anyway
+docker compose run --rm -T web student-bot-backup --restore data/backups/student-bot-backup-chroma-<stamp>.tar.gz   # verifies, then swaps data/chroma
 docker compose run --rm -T web student-bot-cli "Vem är programansvarig för CTFYS?"
-docker compose restart web mattermost      # running services keep the old index in memory
+docker compose up -d web mattermost
 ```
 
 A prod index written by an **older chromadb** is migrated in place the first
