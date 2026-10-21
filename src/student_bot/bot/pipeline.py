@@ -45,10 +45,13 @@ from student_bot.bot.prompts import (
 from student_bot.bot.retrieval import RetrievalResult, RetrievedChunk, get_reranker, retrieve
 from student_bot.bot.web_retrieval import (
     _question_is_master_eligibility,
+    _term_label_sv,
     corpus_programme_substrings_for_query,
     history_without_programme_clarification_tail,
     maybe_fetch_dynamic_web,
+    is_programme_clarification_assistant_message,
     merge_programme_clarification_followup,
+    reply_admission_hints,
 )
 from student_bot.config import Config, get_config
 from student_bot.jargon import Jargon, JargonEntry
@@ -204,6 +207,47 @@ def _glossary_with_codes(glossary_md: str, lang: str, code_to_name: dict[str, st
     return glossary_md + "\n" + "\n".join(entries)
 
 
+def _conversation_facts(
+    cfg: Config,
+    lang: str,
+    program_code: str | None,
+    admission_term: str | None,
+    admission_year_prefix: str | None,
+) -> str:
+    """One prompt line with what the conversation has established: the programme
+    and admission year that `ConversationMemory` keeps per thread.
+
+    The router already reads these to pick a study plan; this lets the model see
+    them too once the turn that stated them has left the history. Neutral wording
+    on purpose: the programme is the one the conversation is about, which need
+    not be the student's own, and a question that says otherwise wins.
+    """
+    sv = lang == "sv"
+    facts: list[str] = []
+    if program_code:
+        code = program_code.strip().upper()
+        name = _resolve_program_codes(cfg, code, lang).get(code, "").strip()
+        label = "program" if sv else "programme"
+        facts.append(f"{label} {code} ({name.capitalize()})" if name else f"{label} {code}")
+    if admission_term:
+        label = "antagningsomgång" if sv else "admission year"
+        facts.append(f"{label} {_term_label_sv(admission_term)}")
+    elif admission_year_prefix:
+        label = "antagningsår" if sv else "admission year"
+        facts.append(f"{label} {admission_year_prefix}")
+    if not facts:
+        return ""
+    if sv:
+        return (
+            f"Från samtalet hittills: {', '.join(facts)}. Använd det bara när frågan gäller "
+            "det; säger frågan något annat gäller frågan."
+        )
+    return (
+        f"From the conversation so far: {', '.join(facts)}. Use it only when the question "
+        "is about it; if the question says otherwise, the question wins."
+    )
+
+
 def build_retrieval_query(
     cfg: Config,
     text: str,
@@ -332,10 +376,12 @@ class AnswerResult:
     # was narrowed to. Callers should persist this in conversation memory so
     # follow-up turns can reuse it as a prior (see ConversationMemory.set_program_code).
     program_code: str | None = None
-    # Admission round actually used this turn (after falling back to a
-    # persisted prior when the current turn carries no hint). Callers
-    # persist via `ConversationMemory.set_admission_hints` so a follow-up
-    # that doesn't restate the term still routes to the same cohort.
+    # Admission year that picked a programme's study plan this turn (the
+    # router falls back to the persisted prior when the turn carries no hint).
+    # It becomes the admission year the conversation is currently about, which
+    # need not be the student's own. Callers persist the pair via
+    # `ConversationMemory.set_admission_hints(replace=True)` so a follow-up that
+    # doesn't restate the term still routes to the same cohort.
     admission_term: str | None = None
     admission_year_prefix: str | None = None
     # UX-honesty signals plumbed up from `ConversationMemory`. The web UI
@@ -344,6 +390,10 @@ class AnswerResult:
     # fires once per pruned slot (TTL boundary crossed since last turn).
     history_truncated: bool = False
     session_expired: bool = False
+    # The full question when this turn folded a clarification reply into the
+    # question it answered. `remember_turn` stores it in place of the
+    # clarification pair, and as the pending question if this turn asked again.
+    merged_question: str | None = None
     # Per-stage wall-clock breakdown (#19 diagnostics). chroma_ms covers
     # query embed + Chroma lookup (CPU); rerank_ms covers the cross-encoder
     # pass (CPU); llm_ms covers prompt-submit → stream-end (GPU/cloud).
@@ -358,6 +408,52 @@ class AnswerResult:
     # retrieval+gate+LLM, this holds the gzippable diagnostic payload to
     # persist via LogDB.record_qa_debug. None on opt-out or short-circuit.
     debug_payload: dict[str, Any] | None = None
+
+
+def turn_priors(memory: ConversationMemory, user_id: str, root_id: str) -> dict[str, Any]:
+    """What earlier turns established, as keyword arguments for `answer`. The
+    read-side counterpart of `remember_turn`, shared by every frontend."""
+    term, year = memory.get_admission_hints(user_id, root_id)
+    return {
+        "history": memory.get(user_id, root_id),
+        "program_prior": memory.get_program_code(user_id, root_id),
+        "admission_term_prior": term,
+        "admission_year_prefix_prior": year,
+        "pending_question_prior": memory.get_pending_question(user_id, root_id),
+    }
+
+
+def remember_turn(
+    memory: ConversationMemory, user_id: str, root_id: str, question: str, result: AnswerResult
+) -> None:
+    """Persist one turn's outcome. Shared by the web, Mattermost and CLI frontends.
+
+    A turn that folded a clarification reply into its question replaces the
+    clarification pair with one pair holding the whole question, so a question
+    costs one turn of memory however many clarifications it took. Sets
+    `result.history_truncated` from the post-turn state."""
+    clarified = result.gate.reason == "programme_clarification"
+    if result.answered or result.meta_fallback or clarified:
+        if result.merged_question:
+            memory.replace_last_pair(user_id, root_id, result.merged_question, result.answer)
+        else:
+            memory.append(user_id, root_id, "user", question)
+            memory.append(user_id, root_id, "assistant", result.answer)
+        # Lives as long as the clarification is the last stored turn. A turn that
+        # is not stored leaves it in place, so the student's retry is still a reply.
+        pending = (result.merged_question or question) if clarified else None
+        memory.set_pending_question(user_id, root_id, pending)
+    if result.program_code:
+        memory.set_program_code(user_id, root_id, result.program_code)
+    if result.admission_term or result.admission_year_prefix:
+        memory.set_admission_hints(
+            user_id,
+            root_id,
+            exact_term=result.admission_term,
+            year_prefix=result.admission_year_prefix,
+            replace=True,
+        )
+    result.history_truncated = memory.history_truncated(user_id, root_id)
 
 
 def _estimate_tokens(text: str) -> int:
@@ -701,6 +797,7 @@ def answer(
     admission_year_prefix_prior: str | None = None,
     channel: str = "mattermost",
     learn_more: bool = False,
+    pending_question_prior: str | None = None,
 ) -> AnswerResult:
     cfg = cfg or get_config()
     history = history or []
@@ -739,8 +836,21 @@ def answer(
             rate_limited=True,
         )
 
-    contextual_q = merge_programme_clarification_followup(question, history, cfg)
+    # Only right after a real clarification: the text detectors behind the merge
+    # also match an ordinary answer that mentions "antagningsomgång".
+    contextual_q = (
+        merge_programme_clarification_followup(
+            question, history, cfg, pending_question=pending_question_prior
+        )
+        if pending_question_prior
+        else question
+    )
     programme_followup_merged = contextual_q != question
+    merged_question = contextual_q if programme_followup_merged else None
+    # The admission year the reply states wins over any year earlier in the joined text.
+    reply_admission = (
+        (reply_admission_hints(question) or None) if programme_followup_merged else None
+    )
     history_for_llm = history_without_programme_clarification_tail(
         history, programme_followup_merged
     )
@@ -776,6 +886,7 @@ def answer(
         program_prior=program_prior,
         admission_term_prior=admission_term_prior,
         admission_year_prefix_prior=admission_year_prefix_prior,
+        admission_hints_override=reply_admission,
     )
     resolved_program_code = web_result.resolved_program_code if web_result else None
 
@@ -792,14 +903,35 @@ def answer(
         glossary_md = _glossary_with_codes(
             glossary_md, lang, _resolve_program_codes(cfg, resolved_program_code.upper(), lang)
         )
-    applied_admission_term = web_result.applied_admission_term if web_result else None
-    applied_admission_year_prefix = web_result.applied_admission_year_prefix if web_result else None
+    # One admission year is in focus at a time: the one the conversation is about,
+    # which need not be the student's own. It counts only when it picked a
+    # programme's study plan this turn, and then replaces the stored one
+    # (`remember_turn`, replace=True). Cases: tests/test_clarification_memory.py.
+    routed_programme = bool(web_result and resolved_program_code)
+    applied_admission_term = web_result.applied_admission_term if routed_programme else None
+    applied_admission_year_prefix = (
+        web_result.applied_admission_year_prefix if routed_programme else None
+    )
+    # Only what earlier turns established: the current message speaks for
+    # itself, and a single-turn question gets the same prompt as before.
+    facts = _conversation_facts(
+        cfg, lang, program_prior, admission_term_prior, admission_year_prefix_prior
+    )
     source_urls: list[str] = []
     stale_cache_days: int | None = None
     if web_result and web_result.clarification:
         msg = web_result.clarification[0] if lang == "sv" else web_result.clarification[1]
         if on_token:
             on_token(msg)
+        # A reply to the admission year question naming a year the programme does
+        # not have is dropped: pending question and stored pair stay as they were.
+        # A programme pick that also names a missing year keeps the pick.
+        if (
+            reply_admission
+            and web_result.admission_not_found
+            and is_programme_clarification_assistant_message(history[-1].get("content", ""))
+        ):
+            contextual_q = merged_question = pending_question_prior
         return AnswerResult(
             question=question,
             lang=lang,
@@ -812,6 +944,7 @@ def answer(
             expanded_question=expanded_q,
             jargon_hits=jargon_hits,
             program_code=resolved_program_code,
+            merged_question=merged_question,
         )
     if web_result and web_result.missing_kth_course:
         msg = web_result.missing_kth_course[0] if lang == "sv" else web_result.missing_kth_course[1]
@@ -963,7 +1096,7 @@ def answer(
         # applied to the prompt that actually produces the answer here (#84).
         offer_counselor = not question_is_offtopic(cfg, gate.top1)
         meta_messages = compose_meta_fallback_messages(
-            cfg, lang, history_for_llm, expanded_q, offer_counselor=offer_counselor
+            cfg, lang, history_for_llm, expanded_q, offer_counselor=offer_counselor, facts=facts
         )
         if jargon_note and cfg.jargon.show_transparency_note:
             _emit_jargon_prefix(jargon_note, on_jargon_prefix, on_token)
@@ -1051,6 +1184,7 @@ def answer(
             retrieval=retrieval,
             latency_ms=int((time.monotonic() - t0) * 1000),
             meta_fallback=meta_fallback,
+            merged_question=merged_question,
             expanded_question=expanded_q,
             jargon_hits=jargon_hits,
             context_tokens_est=context_tokens_est,
@@ -1072,6 +1206,7 @@ def answer(
         retrieval.reranked,
         expanded_q,
         glossary_md=glossary_md,
+        facts=facts,
     )
 
     # Emit the jargon note up-front so the user sees it before tokens stream.
@@ -1202,6 +1337,7 @@ def answer(
         program_code=resolved_program_code,
         admission_term=applied_admission_term,
         admission_year_prefix=applied_admission_year_prefix,
+        merged_question=merged_question,
         chroma_ms=retrieval.chroma_ms,
         rerank_ms=retrieval.rerank_ms,
         llm_ms=llm_ms,
@@ -1294,7 +1430,6 @@ def _repl(cfg: Config, console: Console, *, show_context: bool):
             console.print("[dim]conversation memory cleared[/dim]")
             continue
 
-        history = memory.get(user_id, thread_id)
         if show_context:
             from student_bot.bot.retrieval import retrieve as _rt
 
@@ -1309,38 +1444,21 @@ def _repl(cfg: Config, console: Console, *, show_context: bool):
             sys.stdout.flush()
             printed_any = True
 
-        program_prior = memory.get_program_code(user_id, thread_id)
-        adm_term_prior, adm_year_prior = memory.get_admission_hints(user_id, thread_id)
         session_expired = memory.take_expired_flag(user_id, thread_id)
         result = answer(
             q,
-            history=history,
             cfg=cfg,
             on_token=on_tok,
-            program_prior=program_prior,
-            admission_term_prior=adm_term_prior,
-            admission_year_prefix_prior=adm_year_prior,
             channel="cli",
+            **turn_priors(memory, user_id, thread_id),
         )
         result.session_expired = session_expired
         if printed_any:
             sys.stdout.write("\n")
 
-        if result.answered or result.meta_fallback:
-            memory.append(user_id, thread_id, "user", q)
-            memory.append(user_id, thread_id, "assistant", result.answer)
-        if result.program_code:
-            memory.set_program_code(user_id, thread_id, result.program_code)
-        if result.admission_term or result.admission_year_prefix:
-            memory.set_admission_hints(
-                user_id,
-                thread_id,
-                exact_term=result.admission_term,
-                year_prefix=result.admission_year_prefix,
-            )
-        # Surface eviction state after the append above so the REPL flag
+        # Sets `history_truncated` after the append, so the REPL flag
         # reflects post-turn memory (sticky once the buffer evicts).
-        result.history_truncated = memory.history_truncated(user_id, thread_id)
+        remember_turn(memory, user_id, thread_id, q, result)
 
         console.print(
             f"[dim]lang={result.lang}  gate={result.gate.reason}  "
