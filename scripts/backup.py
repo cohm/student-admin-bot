@@ -180,8 +180,19 @@ def _restore(console: Console, archive: Path, chroma_dir: Path) -> int:
         console.print("[red]refusing to restore an archive that does not verify[/red]")
         return 1
 
-    # A symlinked data/chroma: operate on the directory it points at, so the
-    # link survives and keeps pointing at the restored index.
+    # A symlinked chroma dir: operate on the directory it points at, so the
+    # link survives and keeps pointing at the restored index. Only if that
+    # directory exists from here, though: inside the container a link that
+    # points outside ./data dangles, and restoring "into" it would create the
+    # target in the throwaway container and lose it on exit.
+    if chroma_dir.is_symlink() and not chroma_dir.exists():
+        console.print(
+            f"[red]{chroma_dir} is a link to {chroma_dir.readlink()}, which does not "
+            "exist from here (a symlink outside ./data, run in the container?). "
+            "Nothing restored. Make the link relative and inside ./data, or mount its "
+            'target into the container: docs/DEPLOY.md, "Weekly corpus maintenance".[/red]'
+        )
+        return 1
     chroma_dir = chroma_dir.resolve()
     stamp = datetime.now(timezone.utc).strftime("%Y%m%d-%H%M%S")
     # Both names match the `data/chroma-*/` gitignore rule, so a leftover from
@@ -249,10 +260,12 @@ def _restore(console: Console, archive: Path, chroma_dir: Path) -> int:
             f"not restored: {', '.join(skipped)} (logs.sqlite / web_cache.sqlite are left "
             "for a deliberate manual copy)"
         )
-    # `restart`, not `up -d`: `up -d` is a no-op on services that were never
-    # stopped, and a running process keeps serving the index it loaded at
-    # startup — the swap would then be invisible.
-    console.print("services load it only on (re)start: docker compose restart web mattermost")
+    # A running process keeps serving the index it loaded at startup, and
+    # `up -d` does nothing to a service that was never stopped.
+    console.print(
+        "services load it on start: docker compose up -d web mattermost if you stopped "
+        "them, docker compose restart web mattermost if not"
+    )
     return 0
 
 

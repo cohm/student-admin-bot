@@ -428,7 +428,13 @@ archive path is repo-relative under `data/` because that is the one directory
 the container sees. The services are stopped around it so nothing is reading
 the index while it is swapped, and `up -d` rather than `restart` because they
 are down. `;` rather than `&&` on purpose: a refused restore must still bring
-the services back up on whatever is there.
+the services back up on whatever is there. If `data/chroma` is a symlink
+whose target the container cannot see, `--restore` refuses before touching
+anything. That is any absolute target, even one inside `./data`, and any
+relative target outside it; the same reason `CORPUS_HOST_PATH` exists for the
+corpus. Make the link relative and inside `./data`
+(`ln -s chroma-real data/chroma`), or bind-mount the target into the
+container the way `CORPUS_HOST_PATH` does.
 
 Exit codes, which also set the notification's severity. The headline is the
 eval's verdict on the index, so a run whose only warning is a study-plan cache

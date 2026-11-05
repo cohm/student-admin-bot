@@ -199,7 +199,9 @@ def test_unpack_failure_leaves_nothing_behind(data_dir: Path, monkeypatch: pytes
     assert _leftovers(data_dir) == []
 
 
-def test_swap_failure_rolls_back_and_cleans_up(data_dir: Path, monkeypatch: pytest.MonkeyPatch):
+def test_first_rename_failure_leaves_the_index_and_cleans_up(
+    data_dir: Path, monkeypatch: pytest.MonkeyPatch
+):
     chroma = data_dir / "chroma"
     _fake_index(chroma, "live")
     archive = _write_archive(data_dir)
@@ -223,6 +225,35 @@ def test_swap_failure_rolls_back_and_cleans_up(data_dir: Path, monkeypatch: pyte
     assert _sqlite_marker(chroma) == "live"
     # The staging directory is gone; only the pre-existing blocker remains.
     assert _leftovers(data_dir) == [blocker.name]
+
+
+def test_second_rename_failure_puts_the_old_index_back(
+    data_dir: Path, monkeypatch: pytest.MonkeyPatch
+):
+    """The live index has already been moved aside when the restored one fails
+    to move in. The old one must be renamed back."""
+    chroma = data_dir / "chroma"
+    _fake_index(chroma, "backup")
+    archive = _write_archive(data_dir)
+    shutil.rmtree(chroma)
+    _fake_index(chroma, "live")
+    live = _tree(chroma)
+
+    real_rename = Path.rename
+
+    def rename(self: Path, target):
+        if self.name == "chroma" and self.parent.parent.name.startswith("chroma-restore-"):
+            raise OSError("simulated failure moving the restored index in")
+        return real_rename(self, target)
+
+    monkeypatch.setattr(Path, "rename", rename)
+
+    console = Console(record=True)
+    assert _restore(console, archive, chroma) == 1
+    assert "swap failed" in console.export_text()
+    assert _tree(chroma) == live
+    assert _sqlite_marker(chroma) == "live"
+    assert _leftovers(data_dir) == []
 
 
 def test_symlinked_chroma_dir_is_restored_through_the_link(data_dir: Path, tmp_path: Path):
@@ -286,3 +317,33 @@ def test_full_archive_restores_only_chroma_and_says_so(data_dir: Path):
     assert _sqlite_marker(chroma) == "good"
     assert logs.read_bytes() == b"the live log must not be touched"
     assert "not restored: cache, logs" in console.export_text()
+
+
+@pytest.mark.parametrize("parent_exists", [False, True], ids=["parent missing", "parent exists"])
+def test_symlink_to_a_missing_target_is_refused(
+    data_dir: Path, tmp_path: Path, parent_exists: bool
+):
+    """Inside the container a link outside ./data dangles. Restoring into it
+    would create the target in the throwaway container and lose it. The
+    parent of the target often does exist there (/srv, /opt, /mnt are in the
+    image), so the check has to be on the target, not on its parent."""
+    chroma = data_dir / "chroma"
+    _fake_index(chroma, "good")
+    archive = _write_archive(data_dir)
+    shutil.rmtree(chroma)
+    missing = tmp_path / "srv" / "chroma"
+    if parent_exists:
+        missing.parent.mkdir()
+    chroma.symlink_to(missing)
+
+    # width: the message holds two tmp_path-length paths, and an 80-column
+    # soft wrap can split the phrase asserted on.
+    console = Console(record=True, width=500)
+    assert _restore(console, archive, chroma) == 1
+    out = console.export_text()
+    assert "Nothing restored" in out
+    assert "docs/DEPLOY.md" in out
+    assert not missing.exists()
+    assert missing.parent.exists() == parent_exists
+    assert chroma.is_symlink() and not chroma.exists()
+    assert _leftovers(data_dir) == []
