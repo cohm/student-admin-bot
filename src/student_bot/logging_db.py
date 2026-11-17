@@ -138,6 +138,25 @@ MIGRATIONS: list[tuple[str, str]] = [
     # Per-request host RSS at end of turn, in mebibytes. Cheap psutil call;
     # the time series across this column is the OOM-watch feed for #19.
     ("qa_log.rss_mb", "ALTER TABLE qa_log ADD COLUMN rss_mb INTEGER"),
+    # System One topic classifier in ghost mode (bot/topic_shadow.py): the
+    # label it chose, its per-topic probabilities as JSON, the call's
+    # wall-clock, the model name, and a short reason when the call failed.
+    # NULL when the feature is off, when the turn was not logged, or when
+    # the call never finished (restart mid-call, store failure). The
+    # confidence is the endpoint's own 0-1 score (an entropy measure per the
+    # System One contract), not the 1.0/0.5/0.0 parse heuristic in
+    # `topic_confidence`; a failed chat-model call is stored as topic "other"
+    # with confidence 0.0, so compare the two labels only where
+    # topic_confidence > 0.
+    ("qa_log.shadow_topic", "ALTER TABLE qa_log ADD COLUMN shadow_topic TEXT"),
+    (
+        "qa_log.shadow_topic_confidence",
+        "ALTER TABLE qa_log ADD COLUMN shadow_topic_confidence REAL",
+    ),
+    ("qa_log.shadow_topic_probs", "ALTER TABLE qa_log ADD COLUMN shadow_topic_probs TEXT"),
+    ("qa_log.shadow_topic_ms", "ALTER TABLE qa_log ADD COLUMN shadow_topic_ms INTEGER"),
+    ("qa_log.shadow_topic_model", "ALTER TABLE qa_log ADD COLUMN shadow_topic_model TEXT"),
+    ("qa_log.shadow_topic_error", "ALTER TABLE qa_log ADD COLUMN shadow_topic_error TEXT"),
 ]
 
 
@@ -360,6 +379,27 @@ class LogDB:
                     "classify_ms = ? WHERE id = ?",
                     (topic, confidence, classify_ms, qa_id),
                 )
+            conn.commit()
+
+    def update_shadow_topic(
+        self,
+        qa_id: int,
+        *,
+        topic: str | None,
+        confidence: float | None,
+        probs: str | None,
+        ms: int,
+        model: str | None,
+        error: str | None,
+    ) -> None:
+        """Store the System One ghost-mode verdict (runs async after the answer)."""
+        with self._lock, self._connect() as conn:
+            conn.execute(
+                "UPDATE qa_log SET shadow_topic = ?, shadow_topic_confidence = ?, "
+                "shadow_topic_probs = ?, shadow_topic_ms = ?, shadow_topic_model = ?, "
+                "shadow_topic_error = ? WHERE id = ?",
+                (topic, confidence, probs, ms, model, error, qa_id),
+            )
             conn.commit()
 
     def lookup_qa_by_bot_post(self, bot_post_id: str) -> int | None:

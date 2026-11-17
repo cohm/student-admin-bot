@@ -317,6 +317,22 @@ topics:
   file: topics.yaml
   classifier_temperature: 0.0
 
+# Ghost mode for the System One topic classifier (Nimble on the Spark,
+# reached through the LiteLLM gateway at `<litellm host>/bespoke/v1/systemone`).
+# Runs after the answer next to the topic call above, and only writes the
+# `shadow_topic*` columns of qa_log for comparison. Nothing routes on it.
+# Needs LITELLM_API_KEY in the environment. Nimble shares the Spark with the
+# chat model, so a call can overlap another turn's generation; `max_pending`
+# bounds the calls in flight per process. On prod, switch it with
+# `TOPIC_SHADOW_ENABLED=true` in `.env` rather than editing this file.
+topic_shadow:
+  enabled: false
+  provider: litellm
+  path: /bespoke/v1/systemone
+  model: nimble
+  timeout_seconds: 10
+  max_pending: 4
+
 # Student-jargon dictionary. Expansions happen at query time so retrieval
 # matches the formal term in the corpus. Edit `data/dictionary.json` (or accept
 # proposals via `student-bot-jargon accept N`) — changes are picked up on the

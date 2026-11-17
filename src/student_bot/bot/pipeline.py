@@ -959,6 +959,7 @@ def answer(
             gate=GateDecision(False, "kth_course_not_found", 0.0, 0.0, 0),
             retrieval=RetrievalResult(query=expanded_q),
             latency_ms=int((time.monotonic() - t0) * 1000),
+            merged_question=merged_question,
             expanded_question=expanded_q,
             jargon_hits=jargon_hits,
         )
@@ -977,6 +978,7 @@ def answer(
             gate=GateDecision(False, "kth_program_not_found", 0.0, 0.0, 0),
             retrieval=RetrievalResult(query=expanded_q),
             latency_ms=int((time.monotonic() - t0) * 1000),
+            merged_question=merged_question,
             expanded_question=expanded_q,
             jargon_hits=jargon_hits,
         )
@@ -1072,6 +1074,7 @@ def answer(
             gate=GateDecision(False, "web_unreachable_no_cache", 0.0, 0.0, 0),
             retrieval=RetrievalResult(query=expanded_q),
             latency_ms=int((time.monotonic() - t0) * 1000),
+            merged_question=merged_question,
             expanded_question=expanded_q,
             jargon_hits=jargon_hits,
         )

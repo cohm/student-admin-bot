@@ -324,6 +324,30 @@ class TopicsConfig(BaseModel):
     classifier_temperature: float = 0.0
 
 
+class TopicShadowConfig(BaseModel):
+    """Ghost mode for a System One topic classifier (bot/topic_shadow.py).
+
+    Off by default. When on, every logged question is also sent to
+    `{provider origin}{path}` after the answer, and the verdict lands in the
+    `shadow_topic*` columns of qa_log. Nothing routes on it.
+    """
+
+    # `TOPIC_SHADOW_ENABLED` in the environment overrides this, so prod can
+    # switch it from `.env` without editing the tracked config.yaml.
+    enabled: bool = False
+    # Key in `llm.providers`: supplies the host and the bearer token env var.
+    provider: str = "litellm"
+    # Route on that host. LiteLLM exposes Nimble at the gateway root, not
+    # under `/v1`; Berget's is `/v1/systemone`.
+    path: str = Field(default="/bespoke/v1/systemone", pattern=r"^/")
+    model: str = "nimble"
+    # Nimble answers in ~0.5 s warm and 3 to 5 s cold.
+    timeout_seconds: float = Field(default=10.0, gt=0)
+    # Calls in flight at once per process; further questions are skipped,
+    # not queued. The call can overlap another turn's generation on the GPU.
+    max_pending: int = Field(default=4, ge=1)
+
+
 class JargonConfig(BaseModel):
     enabled: bool = True
     file: str = "data/dictionary.json"
@@ -445,6 +469,7 @@ class Config(BaseModel):
     guardrails: GuardrailsConfig = Field(default_factory=GuardrailsConfig)
     web: WebConfig = Field(default_factory=WebConfig)
     topics: TopicsConfig = Field(default_factory=TopicsConfig)
+    topic_shadow: TopicShadowConfig = Field(default_factory=TopicShadowConfig)
     jargon: JargonConfig = Field(default_factory=JargonConfig)
     notify: NotifyConfig = Field(default_factory=NotifyConfig)
     dynamic_web: DynamicWebConfig = Field(default_factory=DynamicWebConfig)
@@ -618,6 +643,10 @@ def get_config() -> Config:
         cfg.web.base_path = bp
     if a := os.environ.get("WEB_AUTH_ENABLED"):
         cfg.web.auth_enabled = a.lower() in ("1", "true", "yes", "on")
+    # The System One ghost mode is switched from `.env` on prod, because
+    # config.yaml is tracked and a dirty checkout blocks `deploy.sh`.
+    if t := os.environ.get("TOPIC_SHADOW_ENABLED"):
+        cfg.topic_shadow.enabled = t.lower() in ("1", "true", "yes", "on")
 
     return cfg
 
