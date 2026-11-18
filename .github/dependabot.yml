@@ -17,8 +17,13 @@ updates:
     schedule:
       interval: "weekly"
 
-  # Base image in Dockerfile (python:3.11-slim).
+  # Base image in Dockerfile (python:3.12-slim). Minor/major Python moves are
+  # deliberate (requires-python, uv.lock, Chroma volume compatibility), so only
+  # patch updates of the image come through here.
   - package-ecosystem: "docker"
     directory: "/"
     schedule:
       interval: "weekly"
+    ignore:
+      - dependency-name: "python"
+        update-types: ["version-update:semver-major", "version-update:semver-minor"]
