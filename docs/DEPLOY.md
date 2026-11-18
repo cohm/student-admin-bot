@@ -132,6 +132,13 @@ Spark or the tailnet is down, the bot can't generate answers. The fast fallback 
 to switch back to the on-host model without a rebuild: set `LLM_ACTIVE=ollama/gemma-4-E4B-it-GGUF:UD-Q4_K_XL`
 in `.env` and `docker compose up -d` (or export it for a CLI run).
 
+**System One ghost mode:** `TOPIC_SHADOW_ENABLED=true` in `.env` (the
+`topic_shadow:` section in `config.yaml`) sends every logged question once more
+to the gateway, to Nimble at `/bespoke/v1/systemone`, after the answer. It
+uses the same `LITELLM_API_KEY`. `docker compose up -d` after changing it. Off by
+default. Don't edit `config.yaml` on the host: a dirty checkout blocks the next
+deploy.
+
 Quick gateway checks (run from the host, with `LITELLM_API_KEY` exported):
 
 ```bash

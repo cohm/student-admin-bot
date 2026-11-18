@@ -426,3 +426,36 @@ def test_a_merge_after_an_ordinary_answer_keeps_that_answer(cfg, no_corpus_hit):
     turns = memory.get("u", "t")
     assert len(turns) == 4
     assert turns[1]["content"] == "Det beror på din antagningsomgång, se kth.se."
+
+
+@pytest.mark.parametrize(
+    "first, reply, stop, reason",
+    [
+        (_PICK, "CTFYZ", _STOP, "kth_program_not_found"),
+        (
+            _ROUND,
+            "HT2024",
+            WebFetchResult(failure_url="https://www.kth.se/x"),
+            "web_unreachable_no_cache",
+        ),
+        (
+            _ROUND,
+            "HT2024",
+            WebFetchResult(missing_kth_course=("Kursen finns inte.", "No such course.")),
+            "kth_course_not_found",
+        ),
+    ],
+)
+def test_an_early_return_after_a_clarification_still_carries_the_joined_question(
+    cfg, router, first, reply, stop, reason
+):
+    """The topic classifiers read `merged_question`; these three returns used
+    to drop it, so the reply was classified on its own."""
+    memory = ConversationMemory(cfg)
+    router.replies = [first, stop]
+    _turn(cfg, memory, _QUESTION)
+
+    r = _turn(cfg, memory, reply)
+
+    assert r.gate.reason == reason
+    assert r.merged_question == f"{_QUESTION}\n\n{reply}"

@@ -30,6 +30,8 @@ from rich.logging import RichHandler
 
 from student_bot.bot.memory import ConversationMemory
 from student_bot.bot.pipeline import answer, remember_turn, turn_priors
+from student_bot.bot.topic_shadow import refusal, submit_shadow_topic
+from student_bot.bot.topics import text_to_classify
 from student_bot.config import Config, get_config
 from student_bot.logging_db import LogDB
 
@@ -440,14 +442,24 @@ class StudentBot:
 
         # Topic classification runs AFTER the user has their answer so it
         # never adds visible latency. Skip for opted-out users (qa_id is None).
+        # Both classifiers get the joined question when this turn answered a
+        # clarification; see `text_to_classify`.
+        topic_text = text_to_classify(job.question, result.merged_question)
         if qa_id is not None and self.cfg.topics.enabled:
             try:
                 from student_bot.bot.topics import classify
 
-                topic, confidence = classify(self.cfg, job.question, result.lang)
+                topic, confidence = classify(self.cfg, topic_text, result.lang)
                 self.db.update_topic(qa_id, topic, confidence)
             except Exception:
                 log.exception("topic classification failed")
+
+        # Ghost-mode System One classifier: background thread, logs only.
+        # Placed after this turn's topic call; it can still overlap the next
+        # turn's generation on the Spark. `topic_shadow.max_pending` bounds it.
+        submit_shadow_topic(
+            self.cfg, self.db, qa_id, topic_text, result.lang, refused=refusal(result)
+        )
 
     # --- websocket event handling ---
 

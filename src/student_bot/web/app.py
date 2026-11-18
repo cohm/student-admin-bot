@@ -47,7 +47,8 @@ from student_bot.bot.citations import (
 )
 from student_bot.bot.memory import ConversationMemory
 from student_bot.bot.pipeline import answer, remember_turn, turn_priors
-from student_bot.bot.topics import classify
+from student_bot.bot.topic_shadow import refusal, submit_shadow_topic
+from student_bot.bot.topics import classify, text_to_classify
 from student_bot.config import Config, get_config
 from student_bot.jargon import Jargon, _nfc_lower, _read_json, _write_json
 from student_bot.logging_db import LogDB
@@ -691,14 +692,22 @@ def _stream_answer(
             except Exception:
                 log.exception("record_qa_debug failed")
 
+        # Both classifiers get the joined question when this turn answered a
+        # clarification; see `text_to_classify`.
+        topic_text = text_to_classify(payload.question, result.merged_question)
         if qa_id is not None and cfg.topics.enabled:
             try:
                 classify_t0 = time.monotonic()
-                topic, conf = classify(cfg, payload.question, result.lang)
+                topic, conf = classify(cfg, topic_text, result.lang)
                 classify_ms = int((time.monotonic() - classify_t0) * 1000)
                 db.update_topic(qa_id, topic, conf, classify_ms=classify_ms)
             except Exception:
                 log.exception("topic classify failed")
+
+        # Ghost-mode System One classifier: background thread, logs only.
+        # Placed after this turn's topic call; it can still overlap another
+        # user's generation on the Spark. `topic_shadow.max_pending` bounds it.
+        submit_shadow_topic(cfg, db, qa_id, topic_text, result.lang, refused=refusal(result))
 
         # Structured source metadata for the web client. This avoids relying
         # on markdown tail parsing for citation mapping/rendering.

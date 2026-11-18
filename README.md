@@ -53,7 +53,7 @@ Concrete components, file by file:
 | `src/student_bot/bot/memory.py` | Per-thread short-term conversation buffer (12 turns × 30 min TTL) |
 | `src/student_bot/bot/pipeline.py` | Full RAG flow + interactive CLI |
 | `src/student_bot/bot/mattermost_client.py` | Websocket bot with reconnect, threading, GDPR notice, `!privacy`, reactions |
-| `src/student_bot/logging_db.py` | SQLite schema: qa_log, feedback, disclosed, opt-out, anon counter |
+| `src/student_bot/logging_db.py` | SQLite schema: qa_log (incl. `shadow_topic*` from the System One ghost mode), feedback, disclosed, opt-out, anon counter |
 | `src/student_bot/web/app.py` | FastAPI: chat + corpus file server + stats + auth |
 | `src/student_bot/web/auth.py` | Capability-URL token + HTTP Basic (scrypt password hashing) |
 | `eval/run_eval.py` | Recall@5, threshold ROC, gate accuracy on `eval_set.yml` |
@@ -412,6 +412,17 @@ Sources: [bot accounts data model](https://developers.mattermost.com/integrate/r
 `topics.yaml` is the editable taxonomy. Classification happens *after* the
 answer is produced (zero user-visible latency) by a quick Gemma call. The
 result is written to `qa_log.topic` and `qa_log.topic_confidence`.
+
+With `TOPIC_SHADOW_ENABLED=true` in `.env` (or `topic_shadow.enabled` in
+`config.yaml`) the same question also
+goes to the System One classifier (Nimble) on the LiteLLM gateway, and its
+verdict lands in the `shadow_topic*` columns next to Gemma's. Nothing reads
+those columns at runtime; they exist to compare the two. Off by default.
+
+A reply to one of the bot's clarifications ("HT2024") is classified
+together with the question it answers, so a clarified question counts
+under its topic once per turn it took, not once as its topic and once as
+"other".
 
 Editing `topics.yaml` only affects new classifications — old rows keep
 their previous label until you reclassify them.

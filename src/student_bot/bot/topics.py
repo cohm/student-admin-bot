@@ -62,6 +62,18 @@ def _classification_prompt(topics: list[Topic], question: str, lang: str) -> str
     return "\n".join(lines)
 
 
+def text_to_classify(question: str, merged_question: str | None) -> str:
+    """The text every topic classifier gets for a turn.
+
+    A reply to one of the bot's clarifications ("HT2024", "CTFYS") has no
+    topic of its own. The pipeline joins such a reply with the question it
+    answers (`AnswerResult.merged_question`), and that joined text is what
+    the chat model answered, so it is what gets classified. Any other turn
+    is classified as typed.
+    """
+    return merged_question or question
+
+
 def classify(cfg: Config, question: str, lang: str) -> tuple[str, float]:
     """Return (topic_id, confidence). Confidence is a heuristic: 1.0 if the
     model returned exactly an id from the list, else 0.5 if a substring match
@@ -99,4 +111,4 @@ def classify(cfg: Config, question: str, lang: str) -> tuple[str, float]:
     return ("other", 0.0)
 
 
-__all__ = ["Topic", "load_topics", "classify"]
+__all__ = ["Topic", "load_topics", "classify", "text_to_classify"]
