@@ -418,6 +418,10 @@ With `TOPIC_SHADOW_ENABLED=true` in `.env` (or `topic_shadow.enabled` in
 goes to the System One classifier (Nimble) on the LiteLLM gateway, and its
 verdict lands in the `shadow_topic*` columns next to Gemma's. Nothing reads
 those columns at runtime; they exist to compare the two. Off by default.
+`student-bot-stats` adds a ghost-mode section once any row in range has a
+shadow result: errors, call times, agreement with Gemma overall and per band
+of Nimble's confidence, the disagreeing topic pairs, and chat-model latency
+before and since the first shadow row.
 
 A reply to one of the bot's clarifications ("HT2024") is classified
 together with the question it answers, so a clarified question counts

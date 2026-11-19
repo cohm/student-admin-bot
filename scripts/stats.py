@@ -1,4 +1,5 @@
-"""student-bot-stats: per-topic question counts, latency, and 👍/👎 ratios.
+"""student-bot-stats: per-topic question counts, latency, and 👍/👎 ratios,
+plus the System One ghost mode against the chat model's topic when it has run.
 
 Reads SQLite logs only — does not call the LLM.
 """
@@ -84,6 +85,76 @@ def main(since: str | None):
             ratio,
         )
     console.print(body)
+    _print_shadow(console, db.shadow_topic_stats(since_ts), range_label)
+
+
+def _ms(v: int | None) -> str:
+    return "-" if v is None else str(v)
+
+
+def _print_shadow(console: Console, s: dict | None, range_label: str) -> None:
+    """The System One ghost mode (`topic_shadow:`), when any row has a result."""
+    if s is None:
+        console.print("[dim]ghost mode: no shadow-classified rows in range[/dim]")
+        return
+    on_since = datetime.fromtimestamp(s["first_ts"]).strftime("%Y-%m-%d %H:%M")
+
+    head = Table(title=f"Ghost mode, System One topic ({range_label})", show_header=False)
+    head.add_column("metric", style="bold")
+    head.add_column("value", justify="right")
+    head.add_row("first shadow row", f"#{s['first_id']} at {on_since}")
+    head.add_row("classified", f"{s['classified']} of {s['attempted']}")
+    for reason, n in s["errors"].items():
+        head.add_row(f"  error / skip: {reason}", str(n))
+    if s["unwritten"]:
+        head.add_row("no result written", str(s["unwritten"]))
+    head.add_row(
+        "call ms median / p95 / max",
+        f"{_ms(s['ms_median'])} / {_ms(s['ms_p95'])} / {_ms(s['ms_max'])}",
+    )
+    if s["comparable"]:
+        pct = s["agree"] / s["comparable"] * 100
+        agree = f"{s['agree']}/{s['comparable']} ({pct:.0f}%)"
+    else:
+        agree = "-"
+    head.add_row("agrees with chat model", agree)
+    console.print(head)
+
+    bands = Table(title="Agreement by System One confidence")
+    bands.add_column("confidence")
+    bands.add_column("n", justify="right")
+    bands.add_column("agree", justify="right")
+    for b in s["bands"]:
+        share = f"{b['agree'] / b['n'] * 100:.0f}%" if b["n"] else "-"
+        bands.add_row(b["band"], str(b["n"]), f"{b['agree']} ({share})" if b["n"] else "-")
+    console.print(bands)
+
+    if s["disagreements"]:
+        dis = Table(title="Disagreements (chat model → System One)")
+        dis.add_column("chat model")
+        dis.add_column("System One")
+        dis.add_column("n", justify="right")
+        for d in s["disagreements"][:10]:
+            dis.add_row(d["topic"], d["shadow_topic"], str(d["n"]))
+        console.print(dis)
+
+    lat = Table(title="Chat-model latency before / since the first shadow row (medians)")
+    lat.add_column("metric")
+    lat.add_column("before", justify="right")
+    lat.add_column("since", justify="right")
+    for col, v in s["latency"].items():
+        lat.add_row(
+            col,
+            f"{_ms(v['before_median'])} (n={v['before_n']})",
+            f"{_ms(v['after_median'])} (n={v['after_n']})",
+        )
+    console.print(lat)
+    if not s["latency"]["ttft_ms"]["before_n"]:
+        console.print("[dim]no rows before the first shadow row in range; widen --since[/dim]")
+    console.print(
+        "[dim]Latency mixes question types and load; only a long, busy window says "
+        "anything about GPU contention.[/dim]"
+    )
 
 
 if __name__ == "__main__":

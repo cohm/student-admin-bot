@@ -19,6 +19,7 @@ import gzip
 import hashlib
 import json
 import sqlite3
+import statistics
 import time
 from contextlib import contextmanager
 from pathlib import Path
@@ -575,6 +576,107 @@ class LogDB:
             }
             for r in rows
         ]
+
+    # Agreement is reported per band of the System One confidence, to see
+    # whether a low score predicts a disagreement. [low, high).
+    SHADOW_CONF_BANDS: tuple[tuple[str, float, float], ...] = (
+        ("≥ 0.9", 0.9, float("inf")),
+        ("0.7–0.9", 0.7, 0.9),
+        ("0.5–0.7", 0.5, 0.7),
+        ("< 0.5", float("-inf"), 0.5),
+    )
+
+    def shadow_topic_stats(self, since_ts: int = 0, channel: str | None = None) -> dict | None:
+        """The System One ghost mode against the chat model's topic, or None
+        when no row in range has a shadow result or reason.
+
+        Agreement counts only rows whose chat-model call succeeded
+        (`topic_confidence > 0`; a failed call is stored as "other" / 0.0).
+        Latency compares rows logged before the first shadow row in range
+        with rows from it on: the shadow call runs after a turn's answer, so
+        any GPU contention shows up in later turns, not in its own row.
+        """
+        ch_sql, ch_params = self._channel_clause(channel)
+        with self._lock, self._connect() as conn:
+            rows = conn.execute(
+                f"""
+                SELECT q.id, q.ts, q.topic, q.topic_confidence, q.shadow_topic,
+                       q.shadow_topic_confidence, q.shadow_topic_ms,
+                       q.shadow_topic_error, q.ttft_ms, q.llm_ms
+                FROM qa_log q WHERE q.ts >= ?{ch_sql} ORDER BY q.id
+                """,
+                (since_ts, *ch_params),
+            ).fetchall()
+        tried = [r for r in rows if r[4] is not None or r[7] is not None]
+        if not tried:
+            return None
+        first_id, first_ts = tried[0][0], tried[0][1]
+        after = [r for r in rows if r[0] >= first_id]
+        before = [r for r in rows if r[0] < first_id]
+        classified = [r for r in tried if r[4] is not None]
+        comparable = [r for r in classified if (r[3] or 0) > 0]
+
+        errors: dict[str, int] = {}
+        for r in tried:
+            if r[7] is not None:
+                errors[r[7]] = errors.get(r[7], 0) + 1
+
+        def band(label: str, members: list) -> dict:
+            return {"band": label, "n": len(members), "agree": sum(r[2] == r[4] for r in members)}
+
+        bands = [
+            band(label, [r for r in comparable if r[5] is not None and low <= r[5] < high])
+            for label, low, high in self.SHADOW_CONF_BANDS
+        ]
+        if no_conf := [r for r in comparable if r[5] is None]:
+            bands.append(band("none", no_conf))
+
+        pairs: dict[tuple[str, str], int] = {}
+        for r in comparable:
+            if r[2] != r[4]:
+                pairs[(r[2], r[4])] = pairs.get((r[2], r[4]), 0) + 1
+        disagreements = [
+            {"topic": t, "shadow_topic": s, "n": n}
+            for (t, s), n in sorted(pairs.items(), key=lambda kv: (-kv[1], kv[0]))
+        ]
+
+        def median(values: list) -> int | None:
+            vals = sorted(v for v in values if v is not None)
+            return int(statistics.median(vals)) if vals else None
+
+        def count(values: list) -> int:
+            return sum(v is not None for v in values)
+
+        latency = {}
+        for col, idx in (("ttft_ms", 8), ("llm_ms", 9)):
+            b = [r[idx] for r in before]
+            a = [r[idx] for r in after]
+            latency[col] = {
+                "before_median": median(b),
+                "before_n": count(b),
+                "after_median": median(a),
+                "after_n": count(a),
+            }
+
+        ms = sorted(r[6] for r in classified if r[6] is not None)
+        return {
+            "first_id": first_id,
+            "first_ts": first_ts,
+            "attempted": len(tried),
+            "classified": len(classified),
+            # From the first shadow row on, rows with neither a result nor a
+            # reason: a call that never finished, or the feature switched off.
+            "unwritten": len(after) - len(tried),
+            "errors": dict(sorted(errors.items(), key=lambda kv: (-kv[1], kv[0]))),
+            "ms_median": median(ms),
+            "ms_p95": ms[min(len(ms) - 1, int(0.95 * len(ms)))] if ms else None,
+            "ms_max": ms[-1] if ms else None,
+            "comparable": len(comparable),
+            "agree": sum(r[2] == r[4] for r in comparable),
+            "bands": bands,
+            "disagreements": disagreements,
+            "latency": latency,
+        }
 
     def overall_counts(self, since_ts: int = 0, channel: str | None = None) -> dict:
         ch_sql, ch_params = self._channel_clause(channel)
