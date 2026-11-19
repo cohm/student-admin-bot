@@ -847,10 +847,12 @@
       data: makeRssTrendData(rows),
       options: rssTrendOpts(),
     });
+    renderShadow();
   }
 
   async function fetchAndRender(range) {
     currentRange = range;
+    fetchShadow(range);
     try {
       const resp = await fetch(seriesUrl(range), { credentials: "same-origin" });
       if (!resp.ok) throw new Error(`HTTP ${resp.status}`);
@@ -1074,6 +1076,169 @@
         fetchAndShowInspector(user);
       });
     });
+  }
+
+  // --- Admin-only: System One ghost mode (/stats/shadow) ---
+  // The section exists only in the admin HTML; the endpoint 403s for
+  // everyone else. Same range and channel as the charts above.
+  let lastShadow = null;
+
+  const shadowUrl = (range) => seriesUrl(range).replace("/series?", "/shadow?");
+
+  function fill(tpl, vals) {
+    return Object.entries(vals).reduce((s, [k, v]) => s.split(`{${k}}`).join(String(v)), tpl);
+  }
+
+  function topicLabel(id, labels) {
+    const lang = document.documentElement.lang === "en" ? "en" : "sv";
+    const l = labels && labels[id];
+    return l && l[lang] ? `${l[lang]} (${id})` : id;
+  }
+
+  function fmtMs(v) {
+    return v == null ? "–" : String(v);
+  }
+
+  function renderShadow() {
+    const section = document.getElementById("stats-shadow");
+    if (!section) return;
+    if (charts.shadow_bands) {
+      charts.shadow_bands.destroy();
+      charts.shadow_bands = null;
+    }
+    const summary = document.getElementById("stats-shadow-summary");
+    const body = document.getElementById("stats-shadow-body");
+    if (!lastShadow) return;
+    if (lastShadow.error) {
+      summary.textContent = fill(T("stats.shadow.error"), { status: lastShadow.error });
+      body.classList.add("hidden");
+      return;
+    }
+    const s = lastShadow.stats;
+    const labels = lastShadow.labels || {};
+    if (!s) {
+      summary.textContent = T("stats.shadow.empty");
+      body.classList.add("hidden");
+      return;
+    }
+    body.classList.remove("hidden");
+
+    const pct = s.comparable ? `${Math.round((s.agree / s.comparable) * 100)}%` : "–";
+    let text = fill(T("stats.shadow.summary"), {
+      classified: s.classified,
+      attempted: s.attempted,
+      agree: s.agree,
+      comparable: s.comparable,
+      pct,
+      ms_median: fmtMs(s.ms_median),
+      ms_p95: fmtMs(s.ms_p95),
+      first_id: s.first_id,
+      first_time: new Date(s.first_ts * 1000).toLocaleString(
+        document.documentElement.lang === "en" ? "en-GB" : "sv-SE",
+        { dateStyle: "short", timeStyle: "short" },
+      ),
+    });
+    const errs = Object.entries(s.errors || {}).map(([k, n]) => `${k} ${n}`);
+    if (s.unwritten) errs.push(fill(T("stats.shadow.summary.unwritten"), { n: s.unwritten }));
+    if (errs.length) text += ` · ${fill(T("stats.shadow.summary.errors"), { errors: errs.join(", ") })}`;
+    summary.textContent = text;
+
+    const bands = s.bands || [];
+    const bandName = (b) => (b.band === "none" ? T("stats.shadow.none_conf") : b.band);
+    document.getElementById("stats-shadow-bands-rows").innerHTML = bands
+      .map(
+        (b) =>
+          `<tr><td class="text">${escapeHtml(bandName(b))}</td>` +
+          `<td class="num">${b.n}</td><td class="num">${b.agree}</td>` +
+          `<td class="num">${b.n - b.agree}</td></tr>`,
+      )
+      .join("");
+
+    const pairs = s.disagreements || [];
+    document.getElementById("stats-shadow-pairs-rows").innerHTML = pairs.length
+      ? pairs
+          .slice(0, 15)
+          .map(
+            (d) =>
+              `<tr><td class="text">${escapeHtml(topicLabel(d.topic, labels))}</td>` +
+              `<td class="text">${escapeHtml(topicLabel(d.shadow_topic, labels))}</td>` +
+              `<td class="num">${d.n}</td></tr>`,
+          )
+          .join("")
+      : `<tr><td colspan="3" class="text">${escapeHtml(T("stats.shadow.pairs.none"))}</td></tr>`;
+
+    document.getElementById("stats-shadow-latency-rows").innerHTML = Object.entries(
+      s.latency || {},
+    )
+      .map(
+        ([col, v]) =>
+          `<tr><td class="text">${escapeHtml(col)}</td>` +
+          `<td class="num">${fmtMs(v.before_median)} (n=${v.before_n})</td>` +
+          `<td class="num">${fmtMs(v.after_median)} (n=${v.after_n})</td></tr>`,
+      )
+      .join("");
+
+    const el = document.getElementById("chart-shadow-bands");
+    if (!el) return;
+    const ds = (key, color, data) => ({
+      label: T(key),
+      data,
+      backgroundColor: color,
+      // A 2px surface gap between the stacked segments.
+      borderColor: "#ffffff",
+      borderWidth: 2,
+      borderRadius: 4,
+      borderSkipped: false,
+      maxBarThickness: 28,
+    });
+    charts.shadow_bands = new Chart(el, {
+      type: "bar",
+      data: {
+        labels: bands.map(bandName),
+        datasets: [
+          ds("stats.shadow.agree", CHART_COLORS.prompt, bands.map((b) => b.agree)),
+          ds("stats.shadow.disagree", CHART_COLORS.gen, bands.map((b) => b.n - b.agree)),
+        ],
+      },
+      options: {
+        animation: false,
+        responsive: true,
+        indexAxis: "y",
+        scales: {
+          x: {
+            stacked: true,
+            beginAtZero: true,
+            ticks: { precision: 0 },
+            title: { display: true, text: T("stats.shadow.xlabel") },
+          },
+          y: { stacked: true, grid: { display: false } },
+        },
+        plugins: {
+          legend: { position: "top" },
+          tooltip: {
+            callbacks: {
+              label: (ctx) => {
+                const b = bands[ctx.dataIndex];
+                const share = b.n ? ` (${Math.round((ctx.raw / b.n) * 100)}%)` : "";
+                return `${ctx.dataset.label}: ${ctx.raw} / ${b.n}${share}`;
+              },
+            },
+          },
+        },
+      },
+    });
+  }
+
+  async function fetchShadow(range) {
+    if (!document.getElementById("stats-shadow")) return;
+    try {
+      const resp = await fetch(shadowUrl(range), { credentials: "same-origin" });
+      if (!resp.ok) throw new Error(String(resp.status));
+      lastShadow = await resp.json();
+    } catch (err) {
+      lastShadow = { error: err.message || "?" };
+    }
+    if (range === currentRange) renderShadow();
   }
 
   function init() {

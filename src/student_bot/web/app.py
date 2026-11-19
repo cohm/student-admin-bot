@@ -48,7 +48,7 @@ from student_bot.bot.citations import (
 from student_bot.bot.memory import ConversationMemory
 from student_bot.bot.pipeline import answer, remember_turn, turn_priors
 from student_bot.bot.topic_shadow import refusal, submit_shadow_topic
-from student_bot.bot.topics import classify, text_to_classify
+from student_bot.bot.topics import classify, load_topics, text_to_classify
 from student_bot.config import Config, get_config
 from student_bot.jargon import Jargon, _nfc_lower, _read_json, _write_json
 from student_bot.logging_db import LogDB
@@ -322,6 +322,15 @@ def create_app(cfg: Config | None = None) -> FastAPI:
     def stats_series(request: Request, range: str = "72h", ch: str = "all"):
         require_access(request, cfg)
         return _stats_series_response(db, range, channel=_normalize_channel(ch))
+
+    @app.get(_join_base(base_path, "/stats/shadow"))
+    def stats_shadow(request: Request, range: str = "72h", ch: str = "all"):
+        """Admin-only: the System One ghost mode against the chat model's
+        topic (`LogDB.shadow_topic_stats`) for the /stats admin section."""
+        ctx = require_access(request, cfg)
+        if not ctx.is_admin:
+            raise HTTPException(403, "admin only")
+        return _stats_shadow_response(cfg, db, range, channel=_normalize_channel(ch))
 
     @app.get(_join_base(base_path, "/glossary"), response_class=HTMLResponse)
     def glossary(request: Request):
@@ -994,7 +1003,7 @@ _HEADER_HTML = """\
 # Loaded into <head> on every server-rendered page, before notice.js, so
 # data-i18n attributes are translated before any other scripts run.
 _NOTICE_SCRIPT = (
-    '<script src="{static_prefix}/i18n.js?v=43"></script>'
+    '<script src="{static_prefix}/i18n.js?v=44"></script>'
     '<script src="{static_prefix}/notice.js?v=33" defer></script>'
 )
 
@@ -1282,6 +1291,27 @@ def _stats_series_response(db: LogDB, range_key: str, channel: str = "all") -> J
     )
 
 
+def _stats_shadow_response(
+    cfg: Config, db: LogDB, range_key: str, channel: str = "all"
+) -> JSONResponse:
+    spec = _STATS_RANGES.get(range_key)
+    if spec is None:
+        raise HTTPException(400, f"unknown range '{range_key}'")
+    since = int(time.time()) - spec[1]
+    try:
+        labels = {t.id: {"sv": t.sv, "en": t.en} for t in load_topics(cfg)}
+    except Exception:
+        labels = {}
+    return JSONResponse(
+        {
+            "range": range_key,
+            "channel": channel,
+            "stats": db.shadow_topic_stats(since, channel=channel),
+            "labels": labels,
+        }
+    )
+
+
 def _format_relative_ts(now: int, ts: int) -> str:
     """Compact relative time (e.g. '3h', '2d') for the user-activity table."""
     if ts <= 0:
@@ -1467,6 +1497,47 @@ def _stats_page(
   </div>
   <canvas id="chart-rss-trend" height="200"></canvas>
 </section>
+<section class="stats-admin stats-shadow" id="stats-shadow">
+  <h2 data-i18n="stats.shadow.title"></h2>
+  <p class="stats-admin-intro" data-i18n="stats.shadow.intro"></p>
+  <p class="stats-shadow-summary" id="stats-shadow-summary" aria-live="polite"></p>
+  <div class="stats-shadow-body hidden" id="stats-shadow-body">
+    <div class="stats-chart-head">
+      <h3 data-i18n="stats.shadow.bands"></h3>
+      <button type="button" class="stats-export" data-export-chart="shadow_bands"
+              data-i18n="stats.export.png" data-i18n-title="stats.export.png.title"></button>
+    </div>
+    <canvas id="chart-shadow-bands" height="160"></canvas>
+    <table class="stats-table stats-shadow-bands-table">
+      <thead><tr>
+        <th class="text" data-i18n="stats.shadow.th.band"></th>
+        <th class="num" data-i18n="stats.shadow.th.n"></th>
+        <th class="num" data-i18n="stats.shadow.th.agree"></th>
+        <th class="num" data-i18n="stats.shadow.th.disagree"></th>
+      </tr></thead>
+      <tbody id="stats-shadow-bands-rows"></tbody>
+    </table>
+    <h3 data-i18n="stats.shadow.pairs"></h3>
+    <table class="stats-table stats-shadow-pairs-table">
+      <thead><tr>
+        <th class="text" data-i18n="stats.shadow.th.chat"></th>
+        <th class="text" data-i18n="stats.shadow.th.shadow"></th>
+        <th class="num" data-i18n="stats.shadow.th.n"></th>
+      </tr></thead>
+      <tbody id="stats-shadow-pairs-rows"></tbody>
+    </table>
+    <h3 data-i18n="stats.shadow.latency"></h3>
+    <table class="stats-table stats-shadow-latency-table">
+      <thead><tr>
+        <th class="text"></th>
+        <th class="num" data-i18n="stats.shadow.th.before"></th>
+        <th class="num" data-i18n="stats.shadow.th.since"></th>
+      </tr></thead>
+      <tbody id="stats-shadow-latency-rows"></tbody>
+    </table>
+    <p class="stats-admin-intro" data-i18n="stats.shadow.latency_note"></p>
+  </div>
+</section>
 """
         if is_admin
         else ""
@@ -1586,7 +1657,7 @@ def _stats_page(
 <p><a href="{home}" data-i18n="stats.back"></a></p>
 </div></main>
 <script src="{static_prefix}/vendor/chart.umd.min.js?v=36"></script>
-<script src="{static_prefix}/stats.js?v=37" defer></script>
+<script src="{static_prefix}/stats.js?v=38" defer></script>
 </body></html>
 """
     return HTMLResponse(body)

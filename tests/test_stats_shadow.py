@@ -2,14 +2,18 @@
 
 from __future__ import annotations
 
+import base64
 import sqlite3
 
 import pytest
 from click.testing import CliRunner
+from fastapi.testclient import TestClient
 
 from scripts import stats
 from student_bot.config import get_config
 from student_bot.logging_db import LogDB
+from student_bot.web.app import create_app
+from student_bot.web.auth import hash_password
 
 TURN = dict(
     channel_type="D", channel_id="c", bot_post_id="b", root_id="r", lang="sv",
@@ -104,6 +108,41 @@ def test_since_filter_applies(db, cfg):
     row(db, cfg, topic="other", topic_confidence=1.0, ts=100, **shadow("other", 0.9))
     assert db.shadow_topic_stats(since_ts=0)["attempted"] == 1
     assert db.shadow_topic_stats(since_ts=200) is None
+
+
+@pytest.fixture
+def web_cfg(cfg, tmp_path, monkeypatch):
+    monkeypatch.setenv("WEB_ACCESS_TOKEN", "tok")
+    cfg.web.auth_enabled = True
+    cfg.web.users_file = str(tmp_path / "web_users")
+    pw = hash_password("pw")
+    (tmp_path / "web_users").write_text(f"alice:{pw}:admin\nbob:{pw}\n")
+    return cfg
+
+
+def _client(cfg, user: str) -> TestClient:
+    client = TestClient(create_app(cfg))
+    client.get("/api/health?access=tok")
+    client.headers["Authorization"] = "Basic " + base64.b64encode(f"{user}:pw".encode()).decode()
+    return client
+
+
+def test_shadow_endpoint_is_admin_only(web_cfg):
+    db = LogDB(web_cfg)
+    row(db, web_cfg, topic="curriculum_courses", topic_confidence=1.0, **shadow("other", 0.6))
+    assert _client(web_cfg, "bob").get("/stats/shadow?range=24h").status_code == 403
+
+    resp = _client(web_cfg, "alice").get("/stats/shadow?range=24h")
+    assert resp.status_code == 200
+    body = resp.json()
+    assert body["stats"]["agree"] == 0 and body["stats"]["comparable"] == 1
+    assert body["labels"]["curriculum_courses"]["sv"] == "Utbildning, kurser och program"
+    assert _client(web_cfg, "alice").get("/stats/shadow?range=1y").status_code == 400
+
+
+def test_stats_page_has_shadow_section_for_admins_only(web_cfg):
+    assert 'id="stats-shadow"' in _client(web_cfg, "alice").get("/stats").text
+    assert 'id="stats-shadow"' not in _client(web_cfg, "bob").get("/stats").text
 
 
 def test_cli_prints_section(db, cfg, monkeypatch):
