@@ -102,7 +102,7 @@ llm:
     litellm:
       kind: openai_compatible
       base_url: http://100.75.42.33:4000/v1
-      display_name: LiteLLM (lokal Qwen via Spark)
+      display_name: LiteLLM (lokal LLM-gateway)
       api_key_env: LITELLM_API_KEY
       timeout_seconds: 120
       # Runs locally on the Spark over the tailnet — not a third-party cloud,
