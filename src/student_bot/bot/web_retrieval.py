@@ -149,6 +149,9 @@ class AdmissionHints:
 
     exact_term: str | None = None  # five-digit KTH programme period, e.g. 20242
     year_prefix: str | None = None  # antagningsår / HT|VT year, e.g. 2024
+    # Last digit of the term when the student named the season with the year:
+    # "2" for HT, "1" for VT. Picks between two rounds of the same year.
+    season: str | None = None
 
     def __bool__(self) -> bool:
         return bool(self.exact_term or self.year_prefix)
@@ -164,6 +167,10 @@ class ProgrammeRootResolution:
     # The clarification asks again because the programme has no admission in
     # the given year. Lets the pipeline keep that year out of memory.
     admission_not_found: bool = False
+    # Term picked by `default_newest_term` rather than stated by the student.
+    defaulted_term: str | None = None
+    # Term the student's year and season ("VT2024") singled out among several.
+    stated_term: str | None = None
 
 
 def _parse_programme_year_level(q: str) -> int | None:
@@ -353,7 +360,7 @@ def _question_is_year_independent(q: str) -> bool:
     Used as an escape hatch around the multi-term clarification branch in
     `_select_programme_urls`: when the question is general (eligibility,
     mapping, programme metadata, course listing without a year qualifier),
-    we use the newest term unilaterally rather than re-prompting.
+    we use the newest started term unilaterally rather than re-prompting.
     """
     if not q:
         return False
@@ -390,15 +397,17 @@ def parse_program_admission_hints(q: str) -> AdmissionHints:
 
     m = re.search(r"\bHT[- ]?\s*(20\d{2})\b", u)
     if m:
-        return AdmissionHints(year_prefix=m.group(1))
+        return AdmissionHints(year_prefix=m.group(1), season="2")
     m = re.search(r"\bVT[- ]?\s*(20\d{2})\b", u)
     if m:
-        return AdmissionHints(year_prefix=m.group(1))
+        return AdmissionHints(year_prefix=m.group(1), season="1")
     # Two digits only right after HT/VT ("HT22", "ht-22", "VT'23"). Not after a
     # space: "HT 15 hp" is credits, not 2015.
-    m = re.search(r"\b[HV]T[-'’]?(\d{2})\b", u)
+    m = re.search(r"\b([HV])T[-'’]?(\d{2})\b", u)
     if m:
-        return AdmissionHints(year_prefix="20" + m.group(1))
+        return AdmissionHints(
+            year_prefix="20" + m.group(2), season="2" if m.group(1) == "H" else "1"
+        )
 
     # HT = hösttermin = autumn semester, VT = vårtermin = spring semester.
     for pat in (
@@ -409,7 +418,14 @@ def parse_program_admission_hints(q: str) -> AdmissionHints:
     ):
         m = re.search(pat, q, re.I)
         if m:
-            return AdmissionHints(year_prefix=m.group(1))
+            # Every pattern starts with the season word: höst/autumn or vår/spring.
+            # The unaccented short forms are also the verb "var" and "host", and
+            # a match inside a longer word ("svar 2024") is no season either.
+            word = m.group(0).split()[0].upper()
+            inside_word = m.start() > 0 and q[m.start() - 1].isalnum()
+            if word in ("VAR", "HOST") or inside_word:
+                return AdmissionHints(year_prefix=m.group(1))
+            return AdmissionHints(year_prefix=m.group(1), season="2" if word[0] in "HA" else "1")
 
     # Conversational cohort replies (e.g. after bot asked for admission round).
     if re.search(
@@ -467,6 +483,28 @@ def reply_admission_hints(reply: str) -> AdmissionHints:
     if len(years) == 1 and not starts_as_question and ("?" not in text or bare_year_alone):
         return AdmissionHints(year_prefix=years.pop())
     return AdmissionHints()
+
+
+# A message that is nothing but an admission round: "HT2023", "2023",
+# "Jag antogs hösten 2023", "I was admitted in 2023".
+_ROUND_ONLY_RE = re.compile(
+    r"\W*(?:(?:jag|i)\s+)?(?:(?:är|blev|was|got)\s+)?"
+    r"(?:(?:antogs|antagen|började|startade|påbörjade|admitted|started|began)\s+)?"
+    r"(?:(?:i|in|år|till)\s+)?"
+    r"(?:(?:ht|vt|höst(?:en|terminen)?|vår(?:en|terminen)?|autumn|spring)\s*[-'’]?\s*)?"
+    r"\d{2,5}\W*",
+    re.IGNORECASE,
+)
+
+
+def admission_round_only_hints(text: str) -> AdmissionHints:
+    """The admission round a message states when it says nothing else, or
+    empty hints. Stricter than `reply_admission_hints`, which also reads a
+    question or statement that mentions a year: this one is for a message the
+    bot did not ask for."""
+    if not _ROUND_ONLY_RE.fullmatch(text or ""):
+        return AdmissionHints()
+    return reply_admission_hints(text)
 
 
 def is_programme_clarification_assistant_message(content: str) -> bool:
@@ -596,6 +634,10 @@ class WebFetchResult:
     # Set with `clarification` when it asks again because the programme has no
     # admission in the given year (see `ProgrammeRootResolution.admission_not_found`).
     admission_not_found: bool = False
+    # Term the study plan was picked by when the student gave none, or a year
+    # with several (`dynamic_web.default_newest_term`). Kept apart from
+    # `applied_admission_term` so memory never holds a term nobody stated.
+    defaulted_admission_term: str | None = None
 
 
 def _compiled_patterns(cfg: Config) -> list[re.Pattern[str]]:
@@ -2591,14 +2633,38 @@ def _clarify_program_terms_en(program_code: str, terms: list[str]) -> str:
     )
 
 
+def latest_cohort(now: time.struct_time) -> int:
+    """The most recent autumn intake: from August this year's, before it last
+    year's. Until then the coming cohort has no students to ask about."""
+    return now.tm_year if now.tm_mon >= 8 else now.tm_year - 1
+
+
+def _newest_started(sorted_terms_desc: list[str], year_level: int | None = None) -> str:
+    """The newest term whose cohort has started: the last autumn intake, or
+    this year's spring one. KTH lists the next two autumns' rounds ahead of
+    time, so the plain newest would be a cohort with no students yet. With a
+    `year_level` it is the cohort that has reached that study year, admitted
+    that many years earlier. A programme with only later rounds gives its first."""
+    now = time.localtime()
+    back = (year_level or 1) - 1
+    cap = max(f"{latest_cohort(now) - back}2", f"{now.tm_year - back}1")
+    return next((t for t in sorted_terms_desc if t <= cap), sorted_terms_desc[-1])
+
+
 def _select_programme_urls(
     program_code: str,
     sorted_terms_desc: list[str],
     hints: AdmissionHints,
     year_level: int | None = None,
     question: str | None = None,
+    *,
+    default_newest: bool = False,
 ) -> ProgrammeRootResolution:
-    """Pick concrete /program/<code>/<term> URLs or ask for clarification."""
+    """Pick concrete /program/<code>/<term> URLs or ask for clarification.
+
+    With `default_newest`, no admission round or a year matching several picks
+    the newest started one instead of asking (for a question about study year
+    N, the cohort now in year N), and reports it in `defaulted_term`."""
     root = _canonicalize(f"https://{_KTH_HOST}/student/kurser/program/{program_code}")
     terms = sorted_terms_desc
     year_suffix = f"/arskurs{year_level}" if year_level else ""
@@ -2616,12 +2682,18 @@ def _select_programme_urls(
         if len(terms) == 1:
             return ProgrammeRootResolution(queue_urls=[f"{root}/{terms[0]}{year_suffix}"])
         if question and _question_is_year_independent(question):
+            newest = _newest_started(terms)
             log.info(
                 "dynamic-web: %s year-independent question; using newest term %s without asking",
                 program_code,
-                terms[0],
+                newest,
             )
-            return ProgrammeRootResolution(queue_urls=[f"{root}/{terms[0]}{year_suffix}"])
+            return ProgrammeRootResolution(queue_urls=[f"{root}/{newest}{year_suffix}"])
+        if default_newest:
+            newest = _newest_started(terms, year_level)
+            return ProgrammeRootResolution(
+                queue_urls=[f"{root}/{newest}{year_suffix}"], defaulted_term=newest
+            )
         return ProgrammeRootResolution(
             queue_urls=[],
             clarification_sv=_clarify_program_terms_sv(program_code, terms),
@@ -2645,6 +2717,16 @@ def _select_programme_urls(
             clarification_sv=_clarify_program_terms_sv(program_code, terms) + f"\n_({miss_sv})_",
             clarification_en=_clarify_program_terms_en(program_code, terms) + f"\n_({miss_en})_",
             admission_not_found=True,
+        )
+    stated = [t for t in cands if hints.season and t.endswith(hints.season)]
+    if len(stated) == 1:
+        return ProgrammeRootResolution(
+            queue_urls=[f"{root}/{stated[0]}{year_suffix}"], stated_term=stated[0]
+        )
+    if default_newest:
+        newest = _newest_started(cands)
+        return ProgrammeRootResolution(
+            queue_urls=[f"{root}/{newest}{year_suffix}"], defaulted_term=newest
         )
 
     preview = ", ".join(cands[:12])
@@ -2691,13 +2773,21 @@ def _resolve_program_root_targets(
         if re.fullmatch(r"[A-Z]{5}", mc):
             code = mc
 
-    resolved = _select_programme_urls(code, terms, hints, year_level=year_level, question=question)
+    resolved = _select_programme_urls(
+        code,
+        terms,
+        hints,
+        year_level=year_level,
+        question=question,
+        default_newest=cfg.dynamic_web.default_newest_term,
+    )
     log.info(
-        "dynamic-web: programme %s terms=%s hints=%s -> %s",
+        "dynamic-web: programme %s terms=%s hints=%s -> %s%s",
         code,
         terms,
         hints,
         resolved.queue_urls or "ASK",
+        " (defaulted)" if resolved.defaulted_term else "",
     )
     return resolved
 
@@ -2956,6 +3046,8 @@ def maybe_fetch_dynamic_web(
 
     queue: list[str] = list(course_urls)
     resolved_program_code: str | None = None
+    defaulted_admission_term: str | None = None
+    stated_admission_term: str | None = None
     for root in prog_roots:
         res = _resolve_program_root_targets(
             cfg, root, hints, year_level=year_level, question=question
@@ -2976,6 +3068,8 @@ def maybe_fetch_dynamic_web(
             queue.extend(_programme_term_bundle_urls(u))
         if resolved_program_code is None:
             resolved_program_code = _program_segment_code(root)
+            stated_admission_term = res.stated_term
+        defaulted_admission_term = defaulted_admission_term or res.defaulted_term
 
     # Course-without-code path. Triggers when the question references a course
     # by name (no explicit code) and a program code is known — either
@@ -3173,6 +3267,9 @@ def maybe_fetch_dynamic_web(
         used_stale_cache=used_stale,
         stale_age_days=stale_days,
         resolved_program_code=resolved_program_code,
-        applied_admission_term=hints.exact_term,
-        applied_admission_year_prefix=hints.year_prefix,
+        # A year and season that singled out a round are saved as that exact
+        # term, so a follow-up stays on it.
+        applied_admission_term=hints.exact_term or stated_admission_term,
+        applied_admission_year_prefix=None if stated_admission_term else hints.year_prefix,
+        defaulted_admission_term=defaulted_admission_term,
     )

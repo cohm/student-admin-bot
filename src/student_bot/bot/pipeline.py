@@ -51,6 +51,7 @@ from student_bot.bot.web_retrieval import (
     maybe_fetch_dynamic_web,
     is_programme_clarification_assistant_message,
     merge_programme_clarification_followup,
+    admission_round_only_hints,
     reply_admission_hints,
 )
 from student_bot.config import Config, get_config
@@ -384,6 +385,11 @@ class AnswerResult:
     # doesn't restate the term still routes to the same cohort.
     admission_term: str | None = None
     admission_year_prefix: str | None = None
+    # Term the router picked because the student gave none (or a year with
+    # several), set when `numbered_body` names it so a student admitted
+    # another term can say so. Never persisted; `remember_turn` keeps the
+    # question pending instead, and a reply stating the round asks it again.
+    defaulted_admission_term: str | None = None
     # UX-honesty signals plumbed up from `ConversationMemory`. The web UI
     # shows a small notice for each. `history_truncated` is sticky for the
     # session (ring-buffer evicted at least one turn); `session_expired`
@@ -420,6 +426,7 @@ def turn_priors(memory: ConversationMemory, user_id: str, root_id: str) -> dict[
         "admission_term_prior": term,
         "admission_year_prefix_prior": year,
         "pending_question_prior": memory.get_pending_question(user_id, root_id),
+        "pending_defaulted_prior": memory.pending_is_defaulted(user_id, root_id),
     }
 
 
@@ -439,10 +446,12 @@ def remember_turn(
         else:
             memory.append(user_id, root_id, "user", question)
             memory.append(user_id, root_id, "assistant", result.answer)
-        # Lives as long as the clarification is the last stored turn. A turn that
-        # is not stored leaves it in place, so the student's retry is still a reply.
-        pending = (result.merged_question or question) if clarified else None
-        memory.set_pending_question(user_id, root_id, pending)
+        # Lives as long as the clarification, or the answer for an assumed
+        # admission round, is the last stored turn. A turn that is not stored
+        # leaves it in place, so the student's retry is still a reply.
+        defaulted = bool(result.defaulted_admission_term)
+        pending = (result.merged_question or question) if clarified or defaulted else None
+        memory.set_pending_question(user_id, root_id, pending, defaulted=defaulted)
     if result.program_code:
         memory.set_program_code(user_id, root_id, result.program_code)
     if result.admission_term or result.admission_year_prefix:
@@ -776,6 +785,23 @@ def _render(
     return "".join(parts).strip()
 
 
+def _defaulted_term_note(lang: str, term: str | None) -> str:
+    """Names the study plan a defaulted admission round picked, or "" without one."""
+    if not term:
+        return ""
+    other = int(term[:4]) - 1
+    if lang == "sv":
+        return (
+            f"\n\nSvaret utgår från utbildningsplanen för antagna {_term_label_sv(term)}. "
+            f'Antogs du en annan termin, skriv den, till exempel "HT{other}".'
+        )
+    season = "autumn" if term.endswith("2") else "spring"
+    return (
+        f"\n\nThis answer is based on the study plan for students admitted {season} {term[:4]}. "
+        f'If you were admitted another term, say which, for example "HT{other}".'
+    )
+
+
 def _emit_jargon_prefix(jargon_note: str, on_jargon_prefix, on_token) -> None:
     payload = jargon_note + "\n\n"
     if on_jargon_prefix:
@@ -798,6 +824,7 @@ def answer(
     channel: str = "mattermost",
     learn_more: bool = False,
     pending_question_prior: str | None = None,
+    pending_defaulted_prior: bool = False,
 ) -> AnswerResult:
     cfg = cfg or get_config()
     history = history or []
@@ -836,23 +863,32 @@ def answer(
             rate_limited=True,
         )
 
+    # The last answer assumed an admission round and said so: a reply that only
+    # states the round asks that question again, in place of the assumed answer.
+    # Anything more is a new question, which may itself name a term.
+    defaulted_reply = bool(
+        pending_question_prior and pending_defaulted_prior and admission_round_only_hints(question)
+    )
     # Only right after a real clarification: the text detectors behind the merge
     # also match an ordinary answer that mentions "antagningsomgång".
-    contextual_q = (
-        merge_programme_clarification_followup(
+    if defaulted_reply:
+        contextual_q = f"{pending_question_prior}\n\n{question.strip()}"
+    elif pending_question_prior and not pending_defaulted_prior:
+        contextual_q = merge_programme_clarification_followup(
             question, history, cfg, pending_question=pending_question_prior
         )
-        if pending_question_prior
-        else question
-    )
+    else:
+        contextual_q = question
     programme_followup_merged = contextual_q != question
     merged_question = contextual_q if programme_followup_merged else None
     # The admission year the reply states wins over any year earlier in the joined text.
     reply_admission = (
         (reply_admission_hints(question) or None) if programme_followup_merged else None
     )
-    history_for_llm = history_without_programme_clarification_tail(
-        history, programme_followup_merged
+    history_for_llm = (
+        history[:-2]
+        if defaulted_reply
+        else history_without_programme_clarification_tail(history, programme_followup_merged)
     )
 
     # --- expand query for retrieval, build glossary for prompt ---
@@ -912,6 +948,7 @@ def answer(
     applied_admission_year_prefix = (
         web_result.applied_admission_year_prefix if routed_programme else None
     )
+    defaulted_admission_term = web_result.defaulted_admission_term if routed_programme else None
     # Only what earlier turns established: the current message speaks for
     # itself, and a single-turn question gets the same prompt as before.
     facts = _conversation_facts(
@@ -929,6 +966,7 @@ def answer(
         if (
             reply_admission
             and web_result.admission_not_found
+            and history
             and is_programme_clarification_assistant_message(history[-1].get("content", ""))
         ):
             contextual_q = merged_question = pending_question_prior
@@ -1273,6 +1311,19 @@ def answer(
         numbered_body, cited = apply_citation_numbering(body, retrieval.reranked)
         sources_chunks = cited
 
+    # The defaulted-term note belongs to the body the frontends display
+    # (`numbered_body`), not to `answer`, which is what memory and the log keep.
+    # Only when the model answered with that term's study plan in its context.
+    term_in_context = bool(defaulted_admission_term) and any(
+        f"/{defaulted_admission_term}" in (c.source_url or "") for c in retrieval.reranked
+    )
+    if not (answered and term_in_context):
+        defaulted_admission_term = None
+    term_note = _defaulted_term_note(lang, defaulted_admission_term)
+    numbered_body += term_note
+    if on_token and term_note:
+        on_token(term_note)
+
     # Build everything that comes after the body: confidence badge,
     # sources block, literacy tip. Same content for the streaming tail
     # and for the final rendered string consumed by non-streaming
@@ -1340,6 +1391,7 @@ def answer(
         program_code=resolved_program_code,
         admission_term=applied_admission_term,
         admission_year_prefix=applied_admission_year_prefix,
+        defaulted_admission_term=defaulted_admission_term,
         merged_question=merged_question,
         chroma_ms=retrieval.chroma_ms,
         rerank_ms=retrieval.rerank_ms,
