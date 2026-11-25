@@ -761,7 +761,9 @@ def _rate_limited_message(cfg: Config, lang: str) -> str:
     return f"Lugna ner dig lite – högst {n} frågor per minut."
 
 
-def _programme_ask(cfg: Config, question: str, lang: str, program_prior: str | None) -> str:
+def _programme_ask(
+    cfg: Config, question: str, lang: str, channel: str, program_prior: str | None
+) -> str:
     """The question names a course (by a name the cached study plans know)
     without a code, no programme is known and the corpus had nothing: ask for
     the programme, which is what resolves the course (`course_resolver`),
@@ -779,9 +781,12 @@ def _programme_ask(cfg: Config, question: str, lang: str, program_prior: str | N
     # normally answers or asks before the gate fails; this covers the rest.
     if _extract_targets_with_cfg(question, cfg):
         return ""
+    web = channel == "web"
     if lang == "sv":
-        return "Vilket program läser du? Skriv programkoden, t.ex. CTFYS."
-    return "Which programme do you study? Write the programme code, e.g. CTFYS."
+        how = "Välj det ovanför frågan eller skriv" if web else "Skriv"
+        return f"Vilket program läser du? {how} programkoden, t.ex. CTFYS."
+    how = "Pick it above the question or write" if web else "Write"
+    return f"Which programme do you study? {how} the programme code, e.g. CTFYS."
 
 
 def _render(
@@ -815,20 +820,24 @@ def _render(
     return "".join(parts).strip()
 
 
-def _defaulted_term_note(lang: str, term: str | None) -> str:
-    """Names the study plan a defaulted admission round picked, or "" without one."""
+def _defaulted_term_note(lang: str, term: str | None, channel: str) -> str:
+    """Names the study plan a defaulted admission round picked, or "" without one.
+    Only the web UI has a year picker to point at."""
     if not term:
         return ""
+    web = channel == "web"
     other = int(term[:4]) - 1
     if lang == "sv":
+        pick = "välj året ovanför frågan eller " if web else ""
         return (
             f"\n\nSvaret utgår från utbildningsplanen för antagna {_term_label_sv(term)}. "
-            f'Antogs du en annan termin, skriv den, till exempel "HT{other}".'
+            f'Antogs du en annan termin, {pick}skriv den, till exempel "HT{other}".'
         )
     season = "autumn" if term.endswith("2") else "spring"
+    pick = "pick the year above the question or " if web else ""
     return (
         f"\n\nThis answer is based on the study plan for students admitted {season} {term[:4]}. "
-        f'If you were admitted another term, say which, for example "HT{other}".'
+        f'If you were admitted another term, {pick}say which, for example "HT{other}".'
     )
 
 
@@ -1160,7 +1169,9 @@ def answer(
         # A reply merged with the waiting question is not asked again, even one
         # that names no programme ("Jag menar kursen reglerteknik").
         ask = (
-            "" if programme_followup_merged else _programme_ask(cfg, question, lang, program_prior)
+            ""
+            if programme_followup_merged
+            else _programme_ask(cfg, question, lang, channel, program_prior)
         )
         if ask:
             if on_token:
@@ -1369,7 +1380,7 @@ def answer(
     )
     if not (answered and term_in_context):
         defaulted_admission_term = None
-    term_note = _defaulted_term_note(lang, defaulted_admission_term)
+    term_note = _defaulted_term_note(lang, defaulted_admission_term, channel)
     numbered_body += term_note
     if on_token and term_note:
         on_token(term_note)

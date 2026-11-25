@@ -202,6 +202,38 @@ class ConversationMemory:
                 slot.admission_year_prefix = year_prefix
             slot.last_used = now
 
+    def apply_picker(
+        self, user_id: str, root_id: str, program_code: str | None, admission_year: str | None
+    ) -> None:
+        """Write what the web picker shows over the thread's programme /
+        admission year where they differ. The picker sits next to the question,
+        so its value counts as stated with it. A programme or year written in
+        the question still wins for that turn, and the client then moves the
+        picker to it. None is no opinion and changes nothing (an empty picker,
+        a code the list dropped); "" is the student emptying the picker (an
+        emptied year: the newest round)."""
+        now = time.time()
+        with self._lock:
+            self._prune(now)
+            slot = self._store.get((user_id, root_id))
+            if not slot:
+                if not (program_code or admission_year):
+                    return
+                slot = self._store[(user_id, root_id)] = _Slot(last_used=now)
+            if program_code is not None and (program_code or None) != slot.program_code:
+                slot.program_code = program_code or None
+                # A five-digit term belongs with the programme it was given
+                # for; the year carries over.
+                if slot.admission_term:
+                    slot.admission_year_prefix = (
+                        slot.admission_year_prefix or slot.admission_term[:4]
+                    )
+                    slot.admission_term = None
+            held_year = slot.admission_year_prefix or (slot.admission_term or "")[:4] or None
+            if admission_year is not None and (admission_year or None) != held_year:
+                slot.admission_term, slot.admission_year_prefix = None, admission_year or None
+            slot.last_used = now
+
     def history_truncated(self, user_id: str, root_id: str) -> bool:
         """True if the ring buffer has ever evicted a turn from this slot.
         Sticky for the lifetime of the slot."""

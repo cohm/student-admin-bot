@@ -2,6 +2,7 @@
 // links in the answer body; supports 👍/👎 feedback per message.
 
 const state = {
+  pendingKind: "", // "programme" | "year": the picker that answers the bot's last message
   sessionId: localStorage.getItem("session_id") || crypto.randomUUID(),
   name: localStorage.getItem("name") || "",
   optOut: localStorage.getItem("opt_out") === "1",
@@ -25,6 +26,12 @@ const state = {
   // answer. Without this, #92's session list silently showed nothing.
   foreignTurn: null,
   isAdmin: false,
+  // Programme + admission-year picker, sent as program_code / admission_year.
+  // "" = not chosen. The stored year counts only once its option exists.
+  pickProgram: localStorage.getItem("pick_program") || "",
+  pickYear: "",
+  // A picker the student emptied since the last question (`pickerPayload`).
+  emptied: { program: false, year: false },
 };
 localStorage.setItem("session_id", state.sessionId);
 
@@ -40,6 +47,8 @@ const perfServerEl = el("#perf-server");
 const perfModelEl = el("#perf-model");
 const perfPanelEl = el("#perf-panel");
 const perfToggleEl = el("#perf-toggle");
+const pickProgramEl = el("#pick-program");
+const pickYearEl = el("#pick-year");
 let perfEnabled = false;   // deployment allows it AND the reader wants it
 let perfAvailable = false; // deployment allows it
 
@@ -123,6 +132,7 @@ el("#start").addEventListener("click", () => {
   syncTabBarVisibility();
   el("#question").focus();
   if (perfEnabled) refreshSystemLoad();
+  loadPrograms();
 });
 
 // Logging checkbox: positive polarity (ticked = logging enabled) so it
@@ -147,6 +157,190 @@ if (el("#logging-checkbox")) {
   });
 }
 
+// Programme + admission-year picker above the question. Years are this one and
+// the seven before it. Programmes come from static/programs.json once the chat
+// is shown, in three categories: the student picks a category, then a
+// programme from that category's list, which stays hidden until then. Only
+// the programme is stored; its category is looked up from it. Choosing
+// another category shows its list with no programme picked. A value the
+// pickers show is what is sent; one that shows none says nothing, unless the
+// student just emptied it (`pickerPayload`). Only the student's own picks
+// are stored: a value the pickers took from an answer goes with the
+// conversation, and "Börja om" or a reload brings back the student's own.
+const pickCategoryEl = el("#pick-category");
+let categories = [];          // [{key, name_sv, name_en, programs: [[code, name_sv, name_en]]}]
+const categoryOf = new Map(); // programme code -> category key
+
+// A stored value with no option (an aged-out year) would leave the select
+// blank, so it falls back to the empty option.
+function restorePick(select, key) {
+  select.value = localStorage.getItem(key) || "";
+  if (select.selectedIndex < 0) select.value = "";
+  return select.value;
+}
+
+// Everything after the first option (the empty choice) is replaced.
+function fillSelect(select, items) {
+  select.length = 1;
+  for (const [label, value] of items) select.add(new Option(label, value));
+}
+
+// Both selects from `categories`, in the page's language, with category `key`
+// chosen. The programme list is that category's, hidden while none is
+// chosen. The code leads the label: names repeat across categories
+// (Datateknik), and a narrow select cuts a long label off at the end.
+function renderPickers(key = pickCategoryEl.value) {
+  const en = window.currentLang?.() === "en";
+  fillSelect(pickCategoryEl, categories.map((c) => [en ? c.name_en : c.name_sv, c.key]));
+  pickCategoryEl.value = key;
+  const cat = categories.find((c) => c.key === key);
+  fillSelect(pickProgramEl, (cat?.programs || []).map((p) => [`${p[0]} – ${p[en ? 2 : 1]}`, p[0]]));
+  pickProgramEl.value = state.pickProgram;
+  if (pickProgramEl.selectedIndex < 0) pickProgramEl.value = "";
+  pickProgramEl.hidden = !cat;
+}
+
+// Show `code` ("" = none). A code switches to its category; "" keeps the
+// category as it is. A code not (yet) listed shows as none.
+function setProgram(code) {
+  state.pickProgram = code;
+  renderPickers(code ? categoryOf.get(code) || "" : pickCategoryEl.value);
+}
+
+// A failed fetch leaves the programme selects empty and no programme is sent.
+async function loadPrograms() {
+  let list;
+  try {
+    // Bump ?v= when programs.json changes.
+    list = await (await fetch("static/programs.json?v=1")).json();
+  } catch (_) {
+    return;
+  }
+  if (!Array.isArray(list)) return;
+  categories = list;
+  for (const c of categories) for (const p of c.programs) categoryOf.set(p[0], c.key);
+  // A stored code that is no longer listed shows as none.
+  setProgram(categoryOf.has(state.pickProgram) ? state.pickProgram : "");
+}
+
+// What the pickers send with a question. Only a listed programme is sent, so
+// nothing goes before the list has loaded. A picker the student emptied goes
+// once as "", which clears it from the bot's memory; any other empty picker
+// goes as null, which changes nothing there (another device, a dropped code).
+function pickerPayload() {
+  const payload = {
+    program_code: categoryOf.has(state.pickProgram) ? state.pickProgram
+      : state.emptied.program ? "" : null,
+    admission_year: state.pickYear || (state.emptied.year ? "" : null),
+  };
+  state.emptied = { program: false, year: false };
+  return payload;
+}
+
+// The answer settled on a programme or year, from the question or from what
+// the bot remembers: show it and send it from now on, so the pickers follow
+// what the bot is answering about. It is not stored. A value the pickers
+// cannot show (a programme outside the list, a year before the ones offered)
+// shows as none, which sends null and leaves the bot's memory with it. A
+// picker the student changed while the answer streamed keeps their pick
+// (`sent`: the pickers when the question left).
+function syncPickers(meta, sent) {
+  if (meta.program_code && state.pickProgram === sent.program
+      && meta.program_code !== state.pickProgram && categoryOf.size) {
+    setProgram(categoryOf.has(meta.program_code) ? meta.program_code : "");
+  }
+  if (meta.admission_year && state.pickYear === sent.year
+      && meta.admission_year !== state.pickYear) {
+    const offered = [...pickYearEl.options].some((o) => o.value === meta.admission_year);
+    pickYearEl.value = state.pickYear = offered ? meta.admission_year : "";
+  }
+  // A turn waiting for the programme shows none, so that picking any
+  // programme, the one shown before too, answers it. The empty picker sends
+  // null, so the bot's memory keeps its programme.
+  if (meta.pending_kind === "programme" && state.pickProgram === sent.program) setProgram("");
+}
+
+// "Börja om": the student's own picks again, and no question is waiting.
+function restoreOwnPicks() {
+  state.pickProgram = localStorage.getItem("pick_program") || "";
+  renderPickers(categoryOf.get(state.pickProgram) || "");
+  state.pickYear = restorePick(pickYearEl, "pick_year");
+  state.emptied = { program: false, year: false };
+  state.pendingKind = "";
+}
+
+const thisYear = new Date().getFullYear();
+for (let y = thisYear; y >= thisYear - 7; y--) {
+  pickYearEl.add(new Option(String(y), String(y)));
+}
+state.pickYear = restorePick(pickYearEl, "pick_year");
+
+// The student's own picks: stored, and shown from now on.
+function pickProgram(code) {
+  // Un-picked only if a programme was shown: looking through the categories
+  // with none shown says nothing about the one the bot remembers or the one
+  // stored (the page shows none while the bot waits for the programme).
+  if (code || state.pickProgram) {
+    if (!code) state.emptied.program = true;
+    localStorage.setItem("pick_program", code);
+  }
+  setProgram(code);
+}
+function pickYear(year) {
+  state.pickYear = year;
+  localStorage.setItem("pick_year", year);
+  state.emptied.year = !year;
+}
+
+// The bot's last message asked for the programme or admission year, or
+// assumed the year, and the student picked it: send the picked value as
+// their reply ("CTFYS", "2023"), which the bot joins with the waiting
+// question as it does a typed one.
+function answerPending(kind, value) {
+  if (!value || state.pendingKind !== kind || el("#send").disabled) return;
+  state.pendingKind = "";
+  sendQuestion(value);
+}
+
+// A pick counts at once, and one made with the mouse or by touch answers a
+// waiting question at once. From the keyboard a dropdown changes on every
+// key: typing "2023" passes 2026 on the way, and on some systems the arrow
+// keys step through the options. Such a pick answers when the student
+// presses Enter or leaves the dropdown.
+function answerOnPick(select, kind, pick) {
+  let keyed = false; // the dropdown is being worked from the keyboard
+  let unsent = false; // a keyed pick that has not answered yet
+  const answer = () => {
+    unsent = false;
+    answerPending(kind, select.value);
+  };
+  select.addEventListener("change", () => {
+    pick(select.value);
+    if (keyed) unsent = true;
+    else answer();
+  });
+  select.addEventListener("keydown", (e) => {
+    if (e.key !== "Enter") keyed = true;
+    else if (unsent) {
+      e.preventDefault();
+      answer();
+    }
+  });
+  select.addEventListener("pointerdown", () => { keyed = false; });
+  select.addEventListener("blur", () => {
+    keyed = false;
+    if (unsent) answer();
+  });
+}
+
+// Choosing a category shows its list with no programme picked, so the one
+// picked before is no longer sent. No clarification is answered.
+pickCategoryEl.addEventListener("change", () => pickProgram(""));
+answerOnPick(pickProgramEl, "programme", pickProgram);
+answerOnPick(pickYearEl, "year", pickYear);
+// The option labels carry the names, so they follow the language.
+document.addEventListener("i18n:langchange", () => renderPickers());
+
 el("#reset").addEventListener("click", async () => {
   // Confirm before discarding a non-empty conversation. Skip the prompt
   // when the thread is already empty (no work to lose).
@@ -163,6 +357,7 @@ el("#reset").addEventListener("click", async () => {
   }).catch(() => { });
   messages.innerHTML = "";
   state.thread = [];
+  restoreOwnPicks();
   // The debug list mirrors the transcript, so clearing one clears the other —
   // otherwise "Börja om" leaves the previous conversation's turns listed.
   state.turns = [];
@@ -189,11 +384,20 @@ el("#question").addEventListener("keydown", (e) => {
   composer.requestSubmit();
 });
 
-composer.addEventListener("submit", async (e) => {
+composer.addEventListener("submit", (e) => {
   e.preventDefault();
   const q = el("#question").value.trim();
   if (!q) return;
   el("#question").value = "";
+  sendQuestion(q);
+});
+
+// One turn: show the question, stream the answer, decorate it.
+async function sendQuestion(q) {
+  // The pickers as the question leaves, for `syncPickers`, and the
+  // conversation it belongs to ("Börja om" starts a new one).
+  const sent = { program: state.pickProgram, year: state.pickYear };
+  const thread = state.thread;
   el("#send").disabled = true;
   appendUser(q);
   state.thread.push({ role: "user", ts: Date.now(), text: q });
@@ -234,6 +438,7 @@ composer.addEventListener("submit", async (e) => {
         session_id: state.sessionId,
         opt_out: state.optOut,
         learn_more: state.learnMore,
+        ...pickerPayload(),
       }),
     });
     if (!resp.ok || !resp.body) {
@@ -307,6 +512,10 @@ composer.addEventListener("submit", async (e) => {
   }
 
   if (finalMeta) {
+    if (state.thread === thread) {
+      state.pendingKind = finalMeta.pending_kind || "";
+      syncPickers(finalMeta, sent);
+    }
     if (Object.prototype.hasOwnProperty.call(finalMeta, "performance_panel_enabled")) {
       setPerfAvailable(!!finalMeta.performance_panel_enabled);
     }
@@ -332,7 +541,7 @@ composer.addEventListener("submit", async (e) => {
       state.debugCache.set(finalMeta.qa_id, finalMeta.debug);
     }
   }
-});
+}
 
 // Append UX-honesty notices to a bot bubble when the server reports that
 // the LLM context has been truncated or the session was just resurrected

@@ -531,6 +531,15 @@ frontmatter format and the in-tree example.
 `/about` is a server-rendered page explaining the five literacy points
 above. `/stats` shows per-topic counts and feedback ratios.
 
+Above the question box, dropdowns pick the student's programme (a category,
+then a programme from `static/programs.json`) and admission year. What they
+show goes with every question and replaces what the bot remembers; a
+programme or year written in the question wins and the dropdowns move to it.
+A pick that answers the bot's last question is sent as the student's reply.
+Only the student's own picks are stored in the browser (`localStorage`); a
+value the dropdowns took from the conversation is not, and **Börja om** goes
+back to the student's own picks.
+
 ---
 
 ## Guardrails

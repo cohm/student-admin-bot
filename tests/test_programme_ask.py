@@ -1,7 +1,7 @@
 """A course question with no code, no programme known and nothing in the
 corpus asks for the programme instead of answering that nothing was found.
-A typed code is merged with the waiting question like the other programme
-picks."""
+A typed code, or the web picker's pick sent as the reply, is merged with the
+waiting question like the other programme picks."""
 
 import pytest
 
@@ -52,14 +52,48 @@ def empty_corpus(monkeypatch, programmes):
     monkeypatch.setattr(pipeline, "literacy_footer", lambda *_a, **_kw: "_Tips._")
 
 
-def test_asks_for_the_programme_when_the_corpus_has_nothing(empty_corpus):
+@pytest.mark.parametrize(
+    "channel,how",
+    [
+        ("web", "Välj det ovanför frågan eller skriv programkoden"),
+        ("mattermost", "Skriv programkoden"),
+        ("cli", "Skriv programkoden"),
+    ],
+)
+def test_asks_for_the_programme_when_the_corpus_has_nothing(empty_corpus, channel, how):
     streamed: list[str] = []
-    result = answer(Q, cfg=get_config(), on_token=streamed.append)
+    result = answer(Q, cfg=get_config(), channel=channel, on_token=streamed.append)
     assert result.gate.reason == "programme_clarification"
     assert not result.answered
-    assert result.answer == ASK_SV + " Skriv programkoden, t.ex. CTFYS."
+    assert result.answer.startswith(ASK_SV) and how in result.answer
     assert result.rendered == result.answer
     assert streamed == [result.answer]
+
+
+@pytest.mark.parametrize(
+    "q,how",
+    [
+        (Q, "Välj det ovanför frågan eller skriv programkoden"),
+        (
+            "I failed the exam, can I still take the course in reglerteknik next year?",
+            "Pick it above the question or write the programme code",
+        ),
+    ],
+)
+def test_the_web_ui_points_at_the_programme_picker(
+    empty_corpus, chat_turn_inline, tmp_path, q, how
+):
+    """Through /api/chat, which answers as the web channel."""
+    from fastapi.testclient import TestClient
+
+    from student_bot.web import app as web_app
+
+    cfg = get_config().model_copy(deep=True)
+    cfg.paths.logs_db = tmp_path / "logs.sqlite"
+    cfg.web.auth_enabled = False
+    cfg.topics.enabled = False
+    stream = TestClient(web_app.create_app(cfg)).post("/api/chat", json={"question": q}).text
+    assert how in stream
 
 
 def test_old_exams_are_a_course_word_too(empty_corpus):

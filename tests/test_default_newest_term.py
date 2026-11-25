@@ -271,7 +271,36 @@ def test_a_message_that_is_only_a_round_is_a_reply(reply):
 
 
 def test_the_english_note_names_the_season():
-    assert "admitted spring 2024." in pipeline._defaulted_term_note("en", "20241")
+    note = pipeline._defaulted_term_note("en", "20241", "cli")
+    assert "admitted spring 2024." in note
+    assert "above the question" not in note  # only the web UI has a picker
+
+
+@pytest.mark.parametrize(
+    "q,line",
+    [
+        (_Q, "välj året ovanför frågan eller skriv den"),
+        (
+            "Which courses are mandatory in year 3 of CTFYS?",
+            "If you were admitted another term, pick the year above the question or say which",
+        ),
+    ],
+)
+def test_on_the_web_the_line_also_points_at_the_year_picker(
+    web_answer, chat_turn_inline, tmp_path, q, line
+):
+    """Through /api/chat, which answers as the web channel."""
+    from fastapi.testclient import TestClient
+
+    from student_bot.web import app as web_app
+
+    web_answer["term"] = "20242"
+    cfg = get_config().model_copy(deep=True)
+    cfg.paths.logs_db = tmp_path / "logs.sqlite"
+    cfg.web.auth_enabled = False
+    cfg.topics.enabled = False
+    stream = TestClient(web_app.create_app(cfg)).post("/api/chat", json={"question": q}).text
+    assert line in stream
 
 
 def test_the_default_is_the_newest_started_cohort(monkeypatch):
