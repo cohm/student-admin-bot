@@ -31,6 +31,11 @@ from student_bot.bot.citations import (
     format_sources_block,
     literacy_footer,
 )
+from student_bot.bot.course_resolver import (
+    question_has_course_intent,
+    question_has_explicit_course_code,
+    question_names_a_course,
+)
 from student_bot.bot.gate import GateDecision, evaluate as evaluate_gate
 from student_bot.bot.llm import stream_chat
 from student_bot.bot.memory import ConversationMemory
@@ -44,6 +49,8 @@ from student_bot.bot.prompts import (
 )
 from student_bot.bot.retrieval import RetrievalResult, RetrievedChunk, get_reranker, retrieve
 from student_bot.bot.web_retrieval import (
+    _extract_targets_with_cfg,
+    _is_contact_intent_question,
     _question_is_master_eligibility,
     _term_label_sv,
     corpus_programme_substrings_for_query,
@@ -745,6 +752,29 @@ def _rate_limited_message(cfg: Config, lang: str) -> str:
     return f"Lugna ner dig lite – högst {n} frågor per minut."
 
 
+def _programme_ask(cfg: Config, question: str, lang: str, program_prior: str | None) -> str:
+    """The question names a course (by a name the cached study plans know)
+    without a code, no programme is known and the corpus had nothing: ask for
+    the programme, which is what resolves the course (`course_resolver`),
+    rather than answer that nothing was found. Returns "" otherwise."""
+    if not cfg.dynamic_web.ask_programme_for_course:
+        return ""
+    if program_prior or not question_has_course_intent(question):
+        return ""
+    # The web route is what would use the programme, and it skips these.
+    if not cfg.dynamic_web.enabled or _is_contact_intent_question(question):
+        return ""
+    if question_has_explicit_course_code(question) or not question_names_a_course(cfg, question):
+        return ""
+    # The router has a page to go to for a programme the question names. It
+    # normally answers or asks before the gate fails; this covers the rest.
+    if _extract_targets_with_cfg(question, cfg):
+        return ""
+    if lang == "sv":
+        return "Vilket program läser du? Skriv programkoden, t.ex. CTFYS."
+    return "Which programme do you study? Write the programme code, e.g. CTFYS."
+
+
 def _render(
     cfg: Config,
     lang: str,
@@ -1089,6 +1119,26 @@ def answer(
         gate = evaluate_gate(cfg, retrieval)
 
     if not gate.passed:
+        # A reply merged with the waiting question is not asked again, even one
+        # that names no programme ("Jag menar kursen reglerteknik").
+        ask = (
+            "" if programme_followup_merged else _programme_ask(cfg, question, lang, program_prior)
+        )
+        if ask:
+            if on_token:
+                on_token(ask)
+            return AnswerResult(
+                question=question,
+                lang=lang,
+                answered=False,
+                answer=ask,
+                rendered=ask,
+                gate=GateDecision(False, "programme_clarification", gate.top1, gate.meanK, 0),
+                retrieval=retrieval,
+                latency_ms=int((time.monotonic() - t0) * 1000),
+                expanded_question=expanded_q,
+                jargon_hits=jargon_hits,
+            )
         # Run a single LLM call with a self-aware system prompt and no
         # retrieved context, so the bot can either reflect on its scope
         # (when the user asks about it) or politely decline (when the

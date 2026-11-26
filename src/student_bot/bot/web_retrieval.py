@@ -482,9 +482,17 @@ def is_programme_clarification_assistant_message(content: str) -> bool:
 
 
 def is_multi_program_clarification_assistant_message(content: str) -> bool:
-    """True if this assistant text is our 'which program code do you mean?' list."""
+    """True if this assistant text asks which programme: our 'which program code
+    do you mean?' list, or the 'which programme do you study?' question
+    (`pipeline._programme_ask`)."""
     c = (content or "").lower()
-    return "ditt program är inte entydigt" in c or "your program reference is ambiguous" in c
+    return (
+        "ditt program är inte entydigt" in c
+        or "your program reference is ambiguous" in c
+        # pipeline._programme_ask: a course question with no programme known.
+        or "vilket program läser du" in c
+        or "which programme do you study" in c
+    )
 
 
 def _is_clarification_followup_anchor(content: str) -> bool:
@@ -518,13 +526,15 @@ def merge_programme_clarification_followup(
         return question
 
     qstrip = question.strip()
+    name_code = ""
     if is_round:
         if not reply_admission_hints(question):
             return question
     else:
-        # Program pick: require either a 5-letter code or an explicit "I mean X"
-        # / "jag menar X" anchor. A bare short message could just be a topic
-        # shift, so we don't fuse on length alone.
+        # Program pick: require either a 5-letter code (or a name that means one
+        # programme) or an explicit "I mean X" / "jag menar X" anchor. A bare
+        # short message could just be a topic shift, so we don't fuse on length
+        # alone.
         has_code = False
         try:
             aliases = _get_program_aliases(cfg)
@@ -537,6 +547,14 @@ def merge_programme_clarification_followup(
             pass
         if not has_code:
             has_code = bool(_PROGRAM_CODE_RE.search(qstrip))
+        if not has_code:
+            try:
+                candidates = _extract_program_candidates(qstrip, cfg)[0]
+            except Exception:
+                candidates = []
+            if len(candidates) == 1:
+                name_code = candidates[0].code
+            has_code = bool(name_code)
         has_pick_anchor = bool(
             re.search(r"\b(?:jag\s+menar|menar)\b", qstrip, re.IGNORECASE)
             or re.search(r"\bi\s+mean\b", qstrip, re.IGNORECASE)
@@ -553,6 +571,10 @@ def merge_programme_clarification_followup(
     if not prev_user:
         return question
     merged = f"{prev_user}\n\n{qstrip}"
+    if name_code:
+        # The code the name means, written the way the pipeline writes a code
+        # out ("CDATE (datateknik)"), so the router routes on it as on a typed one.
+        merged = f"{prev_user}\n\n{name_code} ({qstrip})"
     log.info(
         "dynamic-web: merged %s clarification follow-up with prior user question",
         "admission-round" if is_round else "program-pick",

@@ -350,6 +350,8 @@ dynamic_web:
   timeout_seconds: 6.0
   max_pages_per_query: 12
   cache_ttl_days: 7
+  # A course named without its code and no programme known: ask which programme.
+  ask_programme_for_course: true
   # Matched against URL path only (host is hardcoded to www.kth.se).
   allowed_patterns:
     - "^/student/kurser/kurs/[A-Z0-9]+/?$"
@@ -365,7 +367,7 @@ dynamic_web:
 # Course lists and kursplan eligibility (Särskild behörighet) per programme and
 # cohort, cached in dynamic_web.cache_db by the weekly scrape — see
 # bot/kth_study_plan.py. Groundwork for backward prerequisite questions (#136);
-# nothing reads it yet.
+# the bot reads only the course names, to tell when a question names a course.
 study_plan_cache:
   enabled: yes
   # KTH's current civilingenjör programmes (kth.se/utbildning/hitta). CKEMV,

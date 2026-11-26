@@ -395,7 +395,8 @@ Order of operations, and why:
 3. **scrape** in the `scrape` service (the corpus is `:ro` everywhere else).
    Its last phase fills the study-plan cache (`study_plan_cache:` in
    `config.yaml`): course lists and kursplan eligibility per programme and
-   cohort, stored in `data/web_cache.sqlite` for #136. Nothing reads it yet.
+   cohort, stored in `data/web_cache.sqlite` for #136. The bot reads the course
+   names from it to tell when a question names a course without its code.
    A page that cannot be refreshed keeps its older entry and turns the run
    yellow (`WARM GAPS:` in `data/maintenance/scrape-*.log`). To fill it without
    waiting for Sunday, e.g. after the first deploy or a changed programme list:
