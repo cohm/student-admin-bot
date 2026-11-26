@@ -15,6 +15,7 @@ from __future__ import annotations
 import pytest
 
 import student_bot.bot.pipeline as pipeline
+from student_bot.bot import course_resolver
 from student_bot.bot import web_retrieval as wr
 from student_bot.bot.gate import GateDecision
 from student_bot.bot.memory import ConversationMemory
@@ -305,7 +306,8 @@ def test_remember_turn_keeps_the_admission_year(cfg):
 def no_corpus_hit(monkeypatch, router):
     """Nothing retrieved and the gate refuses: the meta-fallback path, which is
     where a bare "Förlåt, jag menar HT2024" lands. Records the messages the
-    model would be sent."""
+    model would be sent. No course names are cached, so the programme question
+    never fires and the developer's own web cache is never read."""
     sent: list[list[dict]] = []
 
     def _stream(_cfg, messages, on_thinking=None):
@@ -313,6 +315,7 @@ def no_corpus_hit(monkeypatch, router):
         yield "Svar"
 
     router.replies = [None] * 5
+    monkeypatch.setattr(course_resolver, "cached_course_names", lambda _cfg: frozenset())
     monkeypatch.setattr(pipeline, "retrieve", lambda _cfg, q, **_kw: RetrievalResult(query=q))
     monkeypatch.setattr(
         pipeline, "evaluate_gate", lambda *_a, **_kw: GateDecision(False, "top1<-0.5", -5, -5, 0)
