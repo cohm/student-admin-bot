@@ -167,6 +167,8 @@ def web_answer(monkeypatch):
         )
 
     monkeypatch.setattr(pipeline, "maybe_fetch_dynamic_web", _router)
+    # The pipeline looks the code up to name the programme; not over the network.
+    monkeypatch.setattr(wr, "_get_program_aliases", lambda _cfg: {"ctfys": "CTFYS"})
     monkeypatch.setattr(pipeline, "_jargon", lambda _cfg: None)
     monkeypatch.setattr(pipeline, "_rerank_web_chunks", lambda _cfg, _q, _l, cands: list(cands))
     monkeypatch.setattr(pipeline, "retrieve", lambda _cfg, q, **_kw: RetrievalResult(query=q))
