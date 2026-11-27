@@ -35,10 +35,13 @@ class _Slot:
     # cohort's study plan.
     admission_term: str | None = None  # five-digit KTH period, e.g. "20242"
     admission_year_prefix: str | None = None  # four-digit year, e.g. "2024"
-    # The question a clarification asked about, so the reply ("CTFYS") can be
-    # answered together with it. Lives one turn: callers set it after every
-    # turn, and None clears it.
+    # The question a clarification asked about, or one answered for an assumed
+    # admission round, so the reply ("CTFYS", "HT2023") can be answered together
+    # with it. Lives one turn: callers set it after every turn, and None clears it.
     pending_question: str | None = None
+    # The pending question was answered, for an admission round the student
+    # never gave. False when a clarification asked about it.
+    pending_defaulted: bool = False
     # True once the ring buffer has dropped at least one user/assistant
     # pair to honour max_turns. Sticky for the life of the slot — once
     # context has been silently truncated, the user should keep seeing the
@@ -199,6 +202,38 @@ class ConversationMemory:
                 slot.admission_year_prefix = year_prefix
             slot.last_used = now
 
+    def apply_picker(
+        self, user_id: str, root_id: str, program_code: str | None, admission_year: str | None
+    ) -> None:
+        """Write what the web picker shows over the thread's programme /
+        admission year where they differ. The picker sits next to the question,
+        so its value counts as stated with it. A programme or year written in
+        the question still wins for that turn, and the client then moves the
+        picker to it. None is no opinion and changes nothing (an empty picker,
+        a code the list dropped); "" is the student emptying the picker (an
+        emptied year: the newest round)."""
+        now = time.time()
+        with self._lock:
+            self._prune(now)
+            slot = self._store.get((user_id, root_id))
+            if not slot:
+                if not (program_code or admission_year):
+                    return
+                slot = self._store[(user_id, root_id)] = _Slot(last_used=now)
+            if program_code is not None and (program_code or None) != slot.program_code:
+                slot.program_code = program_code or None
+                # A five-digit term belongs with the programme it was given
+                # for; the year carries over.
+                if slot.admission_term:
+                    slot.admission_year_prefix = (
+                        slot.admission_year_prefix or slot.admission_term[:4]
+                    )
+                    slot.admission_term = None
+            held_year = slot.admission_year_prefix or (slot.admission_term or "")[:4] or None
+            if admission_year is not None and (admission_year or None) != held_year:
+                slot.admission_term, slot.admission_year_prefix = None, admission_year or None
+            slot.last_used = now
+
     def history_truncated(self, user_id: str, root_id: str) -> bool:
         """True if the ring buffer has ever evicted a turn from this slot.
         Sticky for the lifetime of the slot."""
@@ -226,8 +261,16 @@ class ConversationMemory:
             slot.last_used = now
             return slot.pending_question
 
-    def set_pending_question(self, user_id: str, root_id: str, question: str | None) -> None:
-        """Remember the question a clarification asked about; None clears it."""
+    def pending_is_defaulted(self, user_id: str, root_id: str) -> bool:
+        with self._lock:
+            slot = self._store.get((user_id, root_id))
+            return bool(slot and slot.pending_question and slot.pending_defaulted)
+
+    def set_pending_question(
+        self, user_id: str, root_id: str, question: str | None, *, defaulted: bool = False
+    ) -> None:
+        """Remember the question a clarification asked about, or (`defaulted`)
+        one answered for an assumed admission round; None clears it."""
         now = time.time()
         with self._lock:
             self._prune(now)
@@ -238,6 +281,7 @@ class ConversationMemory:
                 slot = _Slot(last_used=now)
                 self._store[(user_id, root_id)] = slot
             slot.pending_question = question
+            slot.pending_defaulted = defaulted
             slot.last_used = now
 
 

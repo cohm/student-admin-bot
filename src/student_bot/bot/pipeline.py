@@ -31,6 +31,11 @@ from student_bot.bot.citations import (
     format_sources_block,
     literacy_footer,
 )
+from student_bot.bot.course_resolver import (
+    question_has_course_intent,
+    question_has_explicit_course_code,
+    question_names_a_course,
+)
 from student_bot.bot.gate import GateDecision, evaluate as evaluate_gate
 from student_bot.bot.llm import stream_chat
 from student_bot.bot.memory import ConversationMemory
@@ -44,6 +49,8 @@ from student_bot.bot.prompts import (
 )
 from student_bot.bot.retrieval import RetrievalResult, RetrievedChunk, get_reranker, retrieve
 from student_bot.bot.web_retrieval import (
+    _extract_targets_with_cfg,
+    _is_contact_intent_question,
     _question_is_master_eligibility,
     _term_label_sv,
     corpus_programme_substrings_for_query,
@@ -51,6 +58,7 @@ from student_bot.bot.web_retrieval import (
     maybe_fetch_dynamic_web,
     is_programme_clarification_assistant_message,
     merge_programme_clarification_followup,
+    admission_round_only_hints,
     reply_admission_hints,
 )
 from student_bot.config import Config, get_config
@@ -384,6 +392,11 @@ class AnswerResult:
     # doesn't restate the term still routes to the same cohort.
     admission_term: str | None = None
     admission_year_prefix: str | None = None
+    # Term the router picked because the student gave none (or a year with
+    # several), set when `numbered_body` names it so a student admitted
+    # another term can say so. Never persisted; `remember_turn` keeps the
+    # question pending instead, and a reply stating the round asks it again.
+    defaulted_admission_term: str | None = None
     # UX-honesty signals plumbed up from `ConversationMemory`. The web UI
     # shows a small notice for each. `history_truncated` is sticky for the
     # session (ring-buffer evicted at least one turn); `session_expired`
@@ -420,6 +433,7 @@ def turn_priors(memory: ConversationMemory, user_id: str, root_id: str) -> dict[
         "admission_term_prior": term,
         "admission_year_prefix_prior": year,
         "pending_question_prior": memory.get_pending_question(user_id, root_id),
+        "pending_defaulted_prior": memory.pending_is_defaulted(user_id, root_id),
     }
 
 
@@ -439,10 +453,12 @@ def remember_turn(
         else:
             memory.append(user_id, root_id, "user", question)
             memory.append(user_id, root_id, "assistant", result.answer)
-        # Lives as long as the clarification is the last stored turn. A turn that
-        # is not stored leaves it in place, so the student's retry is still a reply.
-        pending = (result.merged_question or question) if clarified else None
-        memory.set_pending_question(user_id, root_id, pending)
+        # Lives as long as the clarification, or the answer for an assumed
+        # admission round, is the last stored turn. A turn that is not stored
+        # leaves it in place, so the student's retry is still a reply.
+        defaulted = bool(result.defaulted_admission_term)
+        pending = (result.merged_question or question) if clarified or defaulted else None
+        memory.set_pending_question(user_id, root_id, pending, defaulted=defaulted)
     if result.program_code:
         memory.set_program_code(user_id, root_id, result.program_code)
     if result.admission_term or result.admission_year_prefix:
@@ -745,6 +761,34 @@ def _rate_limited_message(cfg: Config, lang: str) -> str:
     return f"Lugna ner dig lite – högst {n} frågor per minut."
 
 
+def _programme_ask(
+    cfg: Config, question: str, lang: str, channel: str, program_prior: str | None
+) -> str:
+    """The question names a course (by a name the cached study plans know)
+    without a code, no programme is known and the corpus had nothing: ask for
+    the programme, which is what resolves the course (`course_resolver`),
+    rather than answer that nothing was found. Returns "" otherwise."""
+    if not cfg.dynamic_web.ask_programme_for_course:
+        return ""
+    if program_prior or not question_has_course_intent(question):
+        return ""
+    # The web route is what would use the programme, and it skips these.
+    if not cfg.dynamic_web.enabled or _is_contact_intent_question(question):
+        return ""
+    if question_has_explicit_course_code(question) or not question_names_a_course(cfg, question):
+        return ""
+    # The router has a page to go to for a programme the question names. It
+    # normally answers or asks before the gate fails; this covers the rest.
+    if _extract_targets_with_cfg(question, cfg):
+        return ""
+    web = channel == "web"
+    if lang == "sv":
+        how = "Välj det ovanför frågan eller skriv" if web else "Skriv"
+        return f"Vilket program läser du? {how} programkoden, t.ex. CTFYS."
+    how = "Pick it above the question or write" if web else "Write"
+    return f"Which programme do you study? {how} the programme code, e.g. CTFYS."
+
+
 def _render(
     cfg: Config,
     lang: str,
@@ -776,6 +820,27 @@ def _render(
     return "".join(parts).strip()
 
 
+def _defaulted_term_note(lang: str, term: str | None, channel: str) -> str:
+    """Names the study plan a defaulted admission round picked, or "" without one.
+    Only the web UI has a year picker to point at."""
+    if not term:
+        return ""
+    web = channel == "web"
+    other = int(term[:4]) - 1
+    if lang == "sv":
+        pick = "välj året ovanför frågan eller " if web else ""
+        return (
+            f"\n\nSvaret utgår från utbildningsplanen för antagna {_term_label_sv(term)}. "
+            f'Antogs du en annan termin, {pick}skriv den, till exempel "HT{other}".'
+        )
+    season = "autumn" if term.endswith("2") else "spring"
+    pick = "pick the year above the question or " if web else ""
+    return (
+        f"\n\nThis answer is based on the study plan for students admitted {season} {term[:4]}. "
+        f'If you were admitted another term, {pick}say which, for example "HT{other}".'
+    )
+
+
 def _emit_jargon_prefix(jargon_note: str, on_jargon_prefix, on_token) -> None:
     payload = jargon_note + "\n\n"
     if on_jargon_prefix:
@@ -798,6 +863,7 @@ def answer(
     channel: str = "mattermost",
     learn_more: bool = False,
     pending_question_prior: str | None = None,
+    pending_defaulted_prior: bool = False,
 ) -> AnswerResult:
     cfg = cfg or get_config()
     history = history or []
@@ -836,23 +902,32 @@ def answer(
             rate_limited=True,
         )
 
+    # The last answer assumed an admission round and said so: a reply that only
+    # states the round asks that question again, in place of the assumed answer.
+    # Anything more is a new question, which may itself name a term.
+    defaulted_reply = bool(
+        pending_question_prior and pending_defaulted_prior and admission_round_only_hints(question)
+    )
     # Only right after a real clarification: the text detectors behind the merge
     # also match an ordinary answer that mentions "antagningsomgång".
-    contextual_q = (
-        merge_programme_clarification_followup(
+    if defaulted_reply:
+        contextual_q = f"{pending_question_prior}\n\n{question.strip()}"
+    elif pending_question_prior and not pending_defaulted_prior:
+        contextual_q = merge_programme_clarification_followup(
             question, history, cfg, pending_question=pending_question_prior
         )
-        if pending_question_prior
-        else question
-    )
+    else:
+        contextual_q = question
     programme_followup_merged = contextual_q != question
     merged_question = contextual_q if programme_followup_merged else None
     # The admission year the reply states wins over any year earlier in the joined text.
     reply_admission = (
         (reply_admission_hints(question) or None) if programme_followup_merged else None
     )
-    history_for_llm = history_without_programme_clarification_tail(
-        history, programme_followup_merged
+    history_for_llm = (
+        history[:-2]
+        if defaulted_reply
+        else history_without_programme_clarification_tail(history, programme_followup_merged)
     )
 
     # --- expand query for retrieval, build glossary for prompt ---
@@ -912,6 +987,7 @@ def answer(
     applied_admission_year_prefix = (
         web_result.applied_admission_year_prefix if routed_programme else None
     )
+    defaulted_admission_term = web_result.defaulted_admission_term if routed_programme else None
     # Only what earlier turns established: the current message speaks for
     # itself, and a single-turn question gets the same prompt as before.
     facts = _conversation_facts(
@@ -929,6 +1005,7 @@ def answer(
         if (
             reply_admission
             and web_result.admission_not_found
+            and history
             and is_programme_clarification_assistant_message(history[-1].get("content", ""))
         ):
             contextual_q = merged_question = pending_question_prior
@@ -1089,6 +1166,28 @@ def answer(
         gate = evaluate_gate(cfg, retrieval)
 
     if not gate.passed:
+        # A reply merged with the waiting question is not asked again, even one
+        # that names no programme ("Jag menar kursen reglerteknik").
+        ask = (
+            ""
+            if programme_followup_merged
+            else _programme_ask(cfg, question, lang, channel, program_prior)
+        )
+        if ask:
+            if on_token:
+                on_token(ask)
+            return AnswerResult(
+                question=question,
+                lang=lang,
+                answered=False,
+                answer=ask,
+                rendered=ask,
+                gate=GateDecision(False, "programme_clarification", gate.top1, gate.meanK, 0),
+                retrieval=retrieval,
+                latency_ms=int((time.monotonic() - t0) * 1000),
+                expanded_question=expanded_q,
+                jargon_hits=jargon_hits,
+            )
         # Run a single LLM call with a self-aware system prompt and no
         # retrieved context, so the bot can either reflect on its scope
         # (when the user asks about it) or politely decline (when the
@@ -1273,6 +1372,19 @@ def answer(
         numbered_body, cited = apply_citation_numbering(body, retrieval.reranked)
         sources_chunks = cited
 
+    # The defaulted-term note belongs to the body the frontends display
+    # (`numbered_body`), not to `answer`, which is what memory and the log keep.
+    # Only when the model answered with that term's study plan in its context.
+    term_in_context = bool(defaulted_admission_term) and any(
+        f"/{defaulted_admission_term}" in (c.source_url or "") for c in retrieval.reranked
+    )
+    if not (answered and term_in_context):
+        defaulted_admission_term = None
+    term_note = _defaulted_term_note(lang, defaulted_admission_term, channel)
+    numbered_body += term_note
+    if on_token and term_note:
+        on_token(term_note)
+
     # Build everything that comes after the body: confidence badge,
     # sources block, literacy tip. Same content for the streaming tail
     # and for the final rendered string consumed by non-streaming
@@ -1340,6 +1452,7 @@ def answer(
         program_code=resolved_program_code,
         admission_term=applied_admission_term,
         admission_year_prefix=applied_admission_year_prefix,
+        defaulted_admission_term=defaulted_admission_term,
         merged_question=merged_question,
         chroma_ms=retrieval.chroma_ms,
         rerank_ms=retrieval.rerank_ms,

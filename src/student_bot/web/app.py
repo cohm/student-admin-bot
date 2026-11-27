@@ -36,7 +36,7 @@ from fastapi.responses import (
     StreamingResponse,
 )
 from fastapi.staticfiles import StaticFiles
-from pydantic import BaseModel
+from pydantic import BaseModel, field_validator
 from rich.logging import RichHandler
 from starlette.middleware.sessions import SessionMiddleware
 
@@ -49,6 +49,10 @@ from student_bot.bot.memory import ConversationMemory
 from student_bot.bot.pipeline import answer, remember_turn, turn_priors
 from student_bot.bot.topic_shadow import refusal, submit_shadow_topic
 from student_bot.bot.topics import classify, load_topics, text_to_classify
+from student_bot.bot.web_retrieval import (
+    is_multi_program_clarification_assistant_message,
+    is_programme_clarification_assistant_message,
+)
 from student_bot.config import Config, get_config
 from student_bot.jargon import Jargon, _nfc_lower, _read_json, _write_json
 from student_bot.logging_db import LogDB
@@ -134,6 +138,12 @@ class _RedactAccessTokenAccessLog(logging.Filter):
 
 WEB_PKG_DIR = Path(__file__).resolve().parent
 STATIC_DIR = WEB_PKG_DIR / "static"
+# The codes the programme picker offers.
+_PICKER_PROGRAMMES = frozenset(
+    code
+    for category in json.loads((STATIC_DIR / "programs.json").read_text(encoding="utf-8"))
+    for code, *_names in category["programs"]
+)
 
 
 def _perf_panel_enabled(cfg: Config) -> bool:
@@ -219,6 +229,28 @@ class ChatRequest(BaseModel):
     # per-stage timings) and persists it to qa_debug for /api/debug/{qa_id}
     # to surface in the "Learn more" side panel.
     learn_more: bool = False
+    # The programme / admission-year picker above the question. What it shows
+    # replaces what memory holds, as if the student had written it. None
+    # leaves memory alone; "" is the student emptying the picker.
+    program_code: str | None = None
+    admission_year: str | None = None
+
+    @field_validator("program_code")
+    @classmethod
+    def _offered_programme(cls, code: str | None) -> str | None:
+        # A code the list does not have counts as no pick, so a browser that
+        # still holds an older list keeps working.
+        return code if not code or code in _PICKER_PROGRAMMES else None
+
+    @field_validator("admission_year")
+    @classmethod
+    def _offered_year(cls, year: str | None) -> str | None:
+        # The picker offers this year and the seven before it; one more on
+        # each side for a browser clock that differs from the server's.
+        now = time.localtime().tm_year
+        if year and not (re.fullmatch(r"[0-9]{4}", year) and now - 8 <= int(year) <= now + 1):
+            raise ValueError("not an admission year the picker offers")
+        return year
 
 
 class FeedbackRequest(BaseModel):
@@ -591,11 +623,28 @@ def _web_user_id_from_request(request: Request, session_id: str) -> str:
     return f"web:{name}:{session_id or 'default'}"
 
 
+def _pending_kind(result) -> str:
+    """The picker that answers a clarification: "programme" or "year", else "".
+    The year picker also answers an answer that assumed the admission round."""
+    if result.defaulted_admission_term:
+        return "year"
+    if result.gate.reason != "programme_clarification":
+        return ""
+    if is_multi_program_clarification_assistant_message(result.answer):
+        return "programme"
+    if is_programme_clarification_assistant_message(result.answer):
+        return "year"
+    return ""
+
+
 def _stream_answer(
     cfg: Config, db: LogDB, memory: ConversationMemory, payload: ChatRequest, web_user_id: str
 ):
     """Generator producing SSE blocks. Streams answer tokens and a final
     `meta` event with confidence, qa_id, and gate info."""
+    # What the picker shows goes into memory; maybe_fetch_dynamic_web still lets a
+    # hint in the question text win, and remember_turn keeps that one.
+    memory.apply_picker(web_user_id, "default", payload.program_code, payload.admission_year)
     priors = turn_priors(memory, web_user_id, "default")
     session_expired = memory.take_expired_flag(web_user_id, "default")
 
@@ -779,6 +828,13 @@ def _stream_answer(
             "sources": sources,
             "source_candidates": source_candidates,
             "stale_cache_days": result.stale_cache_days,
+            # Which picker answers this clarification, or an answer for an
+            # assumed admission round: "programme", "year" or "" (typed only).
+            # The client sends the picked value as the student's reply.
+            "pending_kind": _pending_kind(result),
+            # What this turn settled on, so the pickers can follow the text.
+            "program_code": result.program_code or "",
+            "admission_year": (result.admission_term or result.admission_year_prefix or "")[:4],
             "performance_panel_enabled": _perf_panel_enabled(cfg),
             # UX-honesty signals for the client: notify the user when the
             # LLM no longer sees the start of the conversation (ring-buffer
@@ -1003,7 +1059,7 @@ _HEADER_HTML = """\
 # Loaded into <head> on every server-rendered page, before notice.js, so
 # data-i18n attributes are translated before any other scripts run.
 _NOTICE_SCRIPT = (
-    '<script src="{static_prefix}/i18n.js?v=44"></script>'
+    '<script src="{static_prefix}/i18n.js?v=46"></script>'
     '<script src="{static_prefix}/notice.js?v=33" defer></script>'
 )
 
@@ -1041,7 +1097,7 @@ def _about_page(cfg: Config, base_path: str = "") -> HTMLResponse:
     )
     body = f"""
 <!doctype html><html lang="sv"><head><meta charset="utf-8"><title>student-bot</title>
-<link rel="stylesheet" href="{static_prefix}/style.css?v=45">{_FAVICON_LINKS.format(static_prefix=static_prefix)}{_NOTICE_SCRIPT.format(static_prefix=static_prefix)}</head>
+<link rel="stylesheet" href="{static_prefix}/style.css?v=46">{_FAVICON_LINKS.format(static_prefix=static_prefix)}{_NOTICE_SCRIPT.format(static_prefix=static_prefix)}</head>
 <body>{_HEADER_HTML.format(tagline_html="", static_prefix=static_prefix, home=home, branding_html=_branding_logo_html(cfg, static_prefix))}<main>{_notice_html(cfg)}<div class="card">
 <h2 data-i18n="about.h2.what"></h2>
 <p data-i18n="about.what.body"></p>
@@ -1085,7 +1141,7 @@ def _glossary_page(cfg: Config, base_path: str = "") -> HTMLResponse:
     )
     body = f"""
 <!doctype html><html lang="sv"><head><meta charset="utf-8"><title>student-bot</title>
-<link rel="stylesheet" href="{static_prefix}/style.css?v=45">{_FAVICON_LINKS.format(static_prefix=static_prefix)}{_NOTICE_SCRIPT.format(static_prefix=static_prefix)}</head>
+<link rel="stylesheet" href="{static_prefix}/style.css?v=46">{_FAVICON_LINKS.format(static_prefix=static_prefix)}{_NOTICE_SCRIPT.format(static_prefix=static_prefix)}</head>
 <body>{_HEADER_HTML.format(tagline_html='<p class="tagline" data-i18n="glossary.tagline"></p>', static_prefix=static_prefix, home=home, branding_html=_branding_logo_html(cfg, static_prefix))}
 <main>{_notice_html(cfg)}<div class="card">
 <table border="1" cellpadding="6" cellspacing="0" style="width:100%; border-collapse: collapse;">
@@ -1196,7 +1252,7 @@ def _md_doc_page(cfg: Config, docs_dir: Path, rel_source: str, base_path: str = 
 
     body = f"""
 <!doctype html><html lang="sv"><head><meta charset="utf-8"><title>{_h(doc.title)}</title>
-<link rel="stylesheet" href="{static_prefix}/style.css?v=45">{_FAVICON_LINKS.format(static_prefix=static_prefix)}{_NOTICE_SCRIPT.format(static_prefix=static_prefix)}</head>
+<link rel="stylesheet" href="{static_prefix}/style.css?v=46">{_FAVICON_LINKS.format(static_prefix=static_prefix)}{_NOTICE_SCRIPT.format(static_prefix=static_prefix)}</head>
 <body>{_HEADER_HTML.format(tagline_html="", static_prefix=static_prefix, home=home, branding_html=_branding_logo_html(cfg, static_prefix))}
 <main><div class="card md-doc">
 <nav class="md-nav">
@@ -1545,7 +1601,7 @@ def _stats_page(
 
     body = f"""
 <!doctype html><html lang="sv"><head><meta charset="utf-8"><title>student-bot</title>
-<link rel="stylesheet" href="{static_prefix}/style.css?v=45">{_FAVICON_LINKS.format(static_prefix=static_prefix)}{_NOTICE_SCRIPT.format(static_prefix=static_prefix)}</head>
+<link rel="stylesheet" href="{static_prefix}/style.css?v=46">{_FAVICON_LINKS.format(static_prefix=static_prefix)}{_NOTICE_SCRIPT.format(static_prefix=static_prefix)}</head>
 <body>{_HEADER_HTML.format(tagline_html="", static_prefix=static_prefix, home=home, branding_html=_branding_logo_html(cfg, static_prefix))}<main>{_notice_html(cfg)}<div class="card stats-card" data-channel="{channel}" data-is-admin="{1 if is_admin else 0}">
 <h1 data-i18n="stats.title"></h1>
 {channel_switch_html}

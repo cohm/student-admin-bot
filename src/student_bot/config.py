@@ -361,6 +361,8 @@ class DynamicWebConfig(BaseModel):
     timeout_seconds: float = 6.0
     max_pages_per_query: int = 12
     cache_ttl_days: int = 7
+    # A course named without its code and no programme known asks for the programme.
+    ask_programme_for_course: bool = True
     # Regexes matched against URL path only (no scheme/host/query).
     allowed_patterns: list[str] = Field(
         default_factory=lambda: [
@@ -396,12 +398,16 @@ class DynamicWebConfig(BaseModel):
     # `matematik` from trivially rescuing extinct masters; lets unique
     # discriminators like `fusionsenergi` still rescue TFEPM.
     discriminator_rare_token_max_aliases: int = 3
+    # A programme question with no admission round, or a year matching several
+    # rounds, uses the newest started round instead of asking. Off restores the question.
+    default_newest_term: bool = True
 
 
 class StudyPlanCacheConfig(BaseModel):
     """Programme course lists and kursplan eligibility, cached by the weekly
-    scrape (`bot/kth_study_plan.py`) for backward prerequisite questions (#136).
-    Off unless config.yaml turns it on."""
+    scrape (`bot/kth_study_plan.py`) for backward prerequisite questions (#136);
+    the course names also tell when a question names a course without its code
+    (`course_resolver.cached_course_names`). Off unless config.yaml turns it on."""
 
     enabled: bool = False
     programmes: list[str] = Field(default_factory=list)
