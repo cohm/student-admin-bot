@@ -148,10 +148,10 @@ CASES: list[Case] = [
         "studyplan-ask",
         "studyplan",
         "Vilka kurser är obligatoriska i CTFYS årskurs 2?",
-        "#129 must not over-narrow: still asks for an admission year",
+        "#129 must not over-narrow: asks for an admission round or assumes the newest",
         lambda r: (
             None
-            if ("antagningsomgång" in answer_body(r) or "HT20" in answer_body(r))
+            if ("antagningsomgång" in answer_body(r) or r.defaulted_admission_term)
             else "no longer routes to the study plan"
         ),
     ),
