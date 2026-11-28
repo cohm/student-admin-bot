@@ -14,12 +14,15 @@ filter parameters, and we'd rather surface no result than a misleading one.
 from __future__ import annotations
 
 import difflib
+import json
 import logging
 import re
 import time
+from collections import Counter
 from dataclasses import dataclass, field
 from urllib.request import Request, urlopen
 
+from student_bot.bot.web_cache import WebCache
 from student_bot.config import Config
 
 log = logging.getLogger("student_bot")
@@ -136,7 +139,7 @@ def _norm(s: str) -> str:
 
 
 _COURSE_KEYWORD_RE = re.compile(
-    r"\b(?:kurs[a-zåäö]*|tenta[a-zåäö]*|föreläsning[a-zåäö]*|labb[a-zåäö]*|"
+    r"\b(?:kurs[a-zåäö]*|tent(?:a|or)[a-zåäö]*|föreläsning[a-zåäö]*|labb[a-zåäö]*|"
     r"examination[a-zåäö]*|course[a-z]*|textbook|exam|lecture[s]?|lab[s]?)\b"
 )
 _PHRASE_PREP_RE = re.compile(r"\b(?:i|om|för|på|inom|in|on|of|for|about)\s+([^.?!]{3,80})")
@@ -191,6 +194,95 @@ def _fuzzy_score(query: str, candidate: str) -> float:
     p = len(overlap) / len(q_tokens)
     r = len(overlap) / len(c_tokens)
     return (2 * p * r / (p + r)) if (p + r) else 0.0
+
+
+# Words a course name shares with many others; they don't identify it.
+_GENERIC_NAME_TOKENS = _STOPWORDS_SCORE | {
+    "kurs",
+    "allmän",
+    "allmänna",
+    "grundkurs",
+    "fortsättningskurs",
+    "del",
+    "course",
+    "general",
+    "basic",
+    "part",
+}
+
+
+def _name_tokens(name: str) -> frozenset[str]:
+    """The words of a course name that identify it."""
+    tokens = {t for t in re.findall(r"[a-z0-9åäö]+", _norm(name)) if len(t) >= 3}
+    return frozenset(tokens - _GENERIC_NAME_TOKENS)
+
+
+def _named_in_question(name: str, q_tokens: set[str]) -> bool:
+    """True when every identifying word of the course name occurs in the
+    question, allowing a close spelling for longer words. Unlike
+    `_fuzzy_score` this needs no phrase to be cut out of the sentence.
+
+    A name that is one word ("Reglerteknik, allmän kurs") must match it
+    exactly, and the word must have at least 8 letters: the shorter ones in
+    the study plans ("Fysik I", "Mekanik") are subjects students mention
+    without meaning that course."""
+    tokens = _name_tokens(name)
+    if not tokens:
+        return False
+    if len(tokens) == 1:
+        (token,) = tokens
+        return len(token) >= 8 and token in q_tokens
+    for t in tokens:
+        if t in q_tokens:
+            continue
+        if len(t) >= 6 and difflib.get_close_matches(t, q_tokens, n=1, cutoff=0.85):
+            continue
+        return False
+    return True
+
+
+_CACHED_NAMES_TTL_SECONDS = 3600.0
+_cached_names: tuple[float, frozenset[str]] | None = None
+
+
+def cached_course_names(cfg: Config) -> frozenset[str]:
+    """Every course name on the programme year pages the weekly study-plan
+    warm (`kth_study_plan`) keeps in the web cache. Empty before the first
+    warm, so callers then simply don't know what a course is called."""
+    global _cached_names
+    now = time.time()
+    if _cached_names and now - _cached_names[0] < _CACHED_NAMES_TTL_SECONDS:
+        return _cached_names[1]
+    try:
+        contents = WebCache(cfg).contents_like("%/student/kurser/program/%#study-plan")
+    except Exception:
+        # Not cached: the next question tries again.
+        log.warning("course-resolver: study-plan cache unreadable", exc_info=True)
+        return frozenset()
+    names: set[str] = set()
+    for content in contents:
+        try:
+            for course in json.loads(content) or []:
+                if isinstance(course, dict) and course.get("name"):
+                    names.add(str(course["name"]))
+        except (TypeError, ValueError):
+            log.warning("course-resolver: skipped a malformed study-plan row")
+    if not names:
+        # Not cached either: the first warm may not have run yet.
+        return frozenset()
+    _cached_names = (now, frozenset(names))
+    return _cached_names[1]
+
+
+def question_names_a_course(cfg: Config, question: str) -> bool:
+    """True when the words after the question's first course word ("tentan i
+    reglerteknik") spell out a course name known from the cached study plans:
+    "finansiering för en kurs utomlands" is not about a course "Finansiering".
+    Needs no programme, unlike `resolve_course_intent`."""
+    qn = _norm(question)
+    kw = _COURSE_KEYWORD_RE.search(qn)
+    q_tokens = set(re.findall(r"[a-z0-9åäö]+", qn[kw.end() :])) if kw else set()
+    return any(_named_in_question(name, q_tokens) for name in cached_course_names(cfg))
 
 
 def _fetch_html(cfg: Config, url: str) -> str:
@@ -307,6 +399,40 @@ def resolve_course_intent(
     if not courses:
         return None
 
+    # Courses named outright in the question are fetched as they are, however
+    # many: they are not alternatives to choose between. A name inside a longer
+    # one also named is not meant ("Programmering, grundkurs" in "objektorienterad
+    # programmering") unless its words occur again outside the longer one; names
+    # that differ only by generic words ("Linjär algebra" and "Linjär algebra,
+    # fortsättningskurs") are alternatives, listed below.
+    # Not the student's words: the programme name the pipeline adds after a
+    # programme code ("CDEPR (… design och produktframtagning)", also a course).
+    unexpanded = re.sub(r"\b([A-Za-z]{5})(?: \((?:[^()]|\([^()]*\))*\))+", r"\1", question)
+    q_words = re.findall(r"[a-z0-9åäö]+", _norm(unexpanded))
+    q_tokens = set(q_words)
+    named_tokens = {
+        c_code: _name_tokens(name) for c_code, name in courses if _named_in_question(name, q_tokens)
+    }
+
+    def _meant(tokens: frozenset[str]) -> bool:
+        longer = [o for o in named_tokens.values() if tokens < o]
+        if not longer:
+            return True
+        rest = Counter(q_words)
+        for o in longer:
+            rest.subtract(o)
+        return all(rest[t] > 0 for t in tokens)
+
+    named = [c for c, t in named_tokens.items() if _meant(t)]
+    if named and len({named_tokens[c] for c in named}) == len(named):
+        log.info("course-resolver: named in question program=%s codes=%s", code, named)
+        return CourseResolution(
+            course_urls=[
+                f"https://www.kth.se/student/kurser/kurs/{c}" for c in named[:max_results]
+            ],
+            matched_phrase=question,
+        )
+
     phrase = _candidate_phrase(question)
     scored: list[CourseHit] = []
     for c_code, name in courses:
@@ -356,5 +482,6 @@ __all__ = [
     "CourseResolution",
     "question_has_course_intent",
     "question_has_explicit_course_code",
+    "question_names_a_course",
     "resolve_course_intent",
 ]
